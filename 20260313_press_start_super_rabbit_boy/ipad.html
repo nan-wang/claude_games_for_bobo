@@ -1,0 +1,1928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Rabbit Boy">
+<title>Super Rabbit Boy: Save Animal Town!</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+}
+#level-panel {
+  width: 200px;
+  min-width: 200px;
+  background: #1a0a3e;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px;
+  gap: 14px;
+  overflow-y: auto;
+  z-index: 10;
+  border-right: 4px solid #ffd700;
+}
+#level-panel h2 {
+  color: #ffd700;
+  font: bold 22px monospace;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.level-btn {
+  background: #2a1a5e;
+  border: 3px solid #4a3a8e;
+  border-radius: 12px;
+  padding: 16px 10px;
+  color: #fff;
+  font: bold 18px monospace;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.level-btn:hover, .level-btn:active {
+  background: #3a2a7e;
+  border-color: #ffd700;
+}
+.level-btn.active {
+  background: #4a3a8e;
+  border-color: #ffd700;
+  box-shadow: 0 0 12px #ffd70066;
+}
+.level-btn .level-icon {
+  font-size: 32px;
+  display: block;
+  margin-bottom: 4px;
+}
+.level-btn .level-name {
+  display: block;
+  font-size: 13px;
+  color: #ccc;
+  margin-top: 4px;
+}
+#canvas-wrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+canvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+</style>
+</head>
+<body>
+<div id="level-panel">
+  <h2>LEVELS</h2>
+  <button class="level-btn active" data-level="0">
+    <span class="level-icon">🌿</span>
+    Level 1
+    <span class="level-name">Green Meadow</span>
+  </button>
+  <button class="level-btn" data-level="1">
+    <span class="level-icon">💎</span>
+    Level 2
+    <span class="level-name">Crystal Cave</span>
+  </button>
+  <button class="level-btn" data-level="2">
+    <span class="level-icon">☁️</span>
+    Level 3
+    <span class="level-name">Sky Bridge</span>
+  </button>
+  <button class="level-btn" data-level="3">
+    <span class="level-icon">🏰</span>
+    Level 4
+    <span class="level-name">Viking's Castle</span>
+  </button>
+</div>
+<div id="canvas-wrap">
+  <canvas id="c"></canvas>
+</div>
+<script>
+// ============================================================
+// SUPER RABBIT BOY: SAVE ANIMAL TOWN!
+// A one-button auto-runner for young players
+// ============================================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 480, H = 270;
+canvas.width = W; canvas.height = H;
+
+// Responsive scaling
+function resize() {
+  const wrap = document.getElementById('canvas-wrap');
+  const s = Math.min(wrap.clientWidth / W, wrap.clientHeight / H);
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// AUDIO SYSTEM (Web Audio API synthesized sounds)
+// ============================================================
+let audioCtx;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playTone(freq, dur, type = 'square', vol = 0.15, slide = 0) {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audioCtx.currentTime + dur);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+
+function sfxJump() { playTone(400, 0.15, 'square', 0.12, 300); }
+function sfxStar() { playTone(800, 0.1, 'square', 0.1); setTimeout(() => playTone(1200, 0.15, 'square', 0.1), 80); }
+function sfxBop() { playTone(200, 0.2, 'square', 0.15, -100); }
+function sfxHurt() { playTone(150, 0.3, 'sawtooth', 0.1, -50); }
+function sfxRescue() {
+  [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => playTone(f, 0.2, 'square', 0.12), i * 120));
+}
+function sfxVictory() {
+  [523, 587, 659, 698, 784, 880, 988, 1047].forEach((f, i) => setTimeout(() => playTone(f, 0.25, 'square', 0.1), i * 150));
+}
+function sfxBossHit() { playTone(100, 0.4, 'sawtooth', 0.2, 50); }
+
+// ============================================================
+// PALETTES & SPRITE DATA
+// ============================================================
+const C = {
+  _: null, // transparent
+  K: '#222', // black outline
+  W: '#fff',
+  P: '#ff6b7a', // coral pink (rabbit)
+  p: '#ff9ca8', // light pink
+  G: '#ffd700', // gold (cape)
+  g: '#ffed4a', // light gold
+  B: '#4a5dbd', // blue-purple (viking)
+  b: '#7b8ee0', // light blue
+  V: '#888', // gray (robots)
+  v: '#aaa', // light gray
+  R: '#ff3333', // red
+  r: '#ff6666', // light red
+  E: '#44cc44', // green
+  e: '#88ee88', // light green
+  O: '#ff8800', // orange (fox)
+  o: '#ffaa44',
+  N: '#8b5e3c', // brown (bear)
+  n: '#b8834a',
+  M: '#cc22cc', // magenta (viking eyes)
+  m: '#ff44ff', // light magenta
+  Y: '#ffcc00', // yellow
+  y: '#ffee66',
+  D: '#666', // dark gray
+  d: '#999', // med gray
+  S: '#c0c0c0', // silver
+  s: '#e0e0e0',
+};
+
+// Rabbit Boy (16x16)
+const sprRabbit = [
+  '_KW_____KW______',
+  '_KWW____KWW_____',
+  '__KWW___KWW_____',
+  '__KWWWWWWWK_____',
+  '__KWKWWKWWK_____',
+  '__KWW_WWWWK_____',
+  '___KWWWWWK______',
+  '_WW_KWWWK_______',
+  '_WW_KWWWKGG_____',
+  '____KWWWK_G_____',
+  '____KWWWK_______',
+  '___KW__KWK______',
+  '___KW___KW______',
+  '___KK___KK______',
+  '________________',
+  '________________',
+];
+
+// Rabbit ears up (jump frame)
+const sprRabbitJump = [
+  '_KW_____KW______',
+  '_KWW____KWW_____',
+  '__KWW___KWW_____',
+  '__KWW____KW_____',
+  '__KWWWWWWWK_____',
+  '__KWKWWKWWK_____',
+  '__KWW_WWWWK_____',
+  '___KWWWWWK______',
+  '_WW_KWWWKGG_____',
+  '_WW_KWWWK_G_____',
+  '____KWWWK_______',
+  '___KW____WK_____',
+  '___KW____WK_____',
+  '___KK____KK_____',
+  '________________',
+  '________________',
+];
+
+// King Viking (20x22)
+const sprViking = [
+  '_WK__________WK_____',
+  '_WWK___KK___WWK_____',
+  '__WWK_KWWK_WWK______',
+  '___WKKWWWWKKW________',
+  '___KWWWWWWWWK________',
+  '___KSSSSSSSK________',
+  '___KOOOOOOOK________',
+  '___KOmKOOKmOK_______',
+  '___KOOOOOOOK________',
+  '___KOK_KK_KOK_______',
+  '___KOKWWWWKOK_______',
+  '____KOOOOOOK________',
+  '____KBBBBBBK________',
+  '___KKBBBBBBKK_______',
+  '__KB_KBBBBK_BK______',
+  '__KB__KBBK__BK______',
+  '______KBBK__________',
+  '_____KB__BK_________',
+  '_____KB__BK_________',
+  '_____KK__KK_________',
+  '____________________',
+  '____________________',
+];
+
+// Robot (12x12)
+const sprRobot = [
+  '____VVVV____',
+  '___VVVVVV___',
+  '__VVRRVVRR__',
+  '__VVVVVVVV__',
+  '__VVVVVVVV__',
+  '___VVDDVV___',
+  '_DDVVVVVVDD_',
+  '__DDVVVVDD__',
+  '____VVVV____',
+  '____VVVV____',
+  '___VV__VV___',
+  '___KK__KK___',
+];
+
+// Robot defeated (spiral eyes)
+const sprRobotKO = [
+  '____VVVV____',
+  '___VVVVVV___',
+  '__VVYyVVYy__',
+  '__VVyYVVyY__',
+  '__VVVVVVVV__',
+  '___VVDDVV___',
+  '_DDVVVVVVDD_',
+  '__DDVVVVDD__',
+  '____VVVV____',
+  '____VVVV____',
+  '___VV__VV___',
+  '___KK__KK___',
+];
+
+// Animal friends (12x12 each)
+const sprBunny = [
+  '___pp__pp___',
+  '___pp__pp___',
+  '__pppppppp__',
+  '__ppKppKpp__',
+  '__pppppppp__',
+  '___pppppp___',
+  '___pppppp___',
+  '____pppp____',
+  '____pppp____',
+  '___pp__pp___',
+  '___pp__pp___',
+  '____________',
+];
+
+const sprFox = [
+  '_OO____OO___',
+  '__OO__OO____',
+  '__OOOOOO____',
+  '__OKOOKOo___',
+  '__OOOOOO____',
+  '___oOOOo____',
+  '___OOOO_____',
+  '____OO______',
+  '____OO______',
+  '___OO_OO____',
+  '____________',
+  '____________',
+];
+
+const sprBear = [
+  '_NN____NN___',
+  '_NnN__NnN___',
+  '__NNNNNN____',
+  '__NKNNKNn___',
+  '__NNNNNN____',
+  '__NnNNNn____',
+  '__NNNNNN____',
+  '___NNNN_____',
+  '___NNNN_____',
+  '__NN__NN____',
+  '__NN__NN____',
+  '____________',
+];
+
+const sprCat = [
+  '_DD____DD___',
+  '__DD__DD____',
+  '__DDDDDD____',
+  '__DKDDKDd___',
+  '__DDDDDD____',
+  '___dDDDd____',
+  '___DDDD_____',
+  '____DD______',
+  '____DD______',
+  '___DD_DD____',
+  '____________',
+  '____________',
+];
+
+// Star collectible (8x8)
+const sprStar = [
+  '____Y___',
+  '___YYY__',
+  '_YYYYYYY',
+  '__YYYYY_',
+  '___YYY__',
+  '__YY_YY_',
+  '_YY___YY',
+  '________',
+];
+
+// Mushroom (10x8)
+const sprMushroom = [
+  '___RRRR___',
+  '__RRrrRR__',
+  '_RRrrrrRR_',
+  '_RRRRRRRR_',
+  '___ssss___',
+  '___ssss___',
+  '___ssss___',
+  '__KKKKKK__',
+];
+
+// Heart (8x8)
+const sprHeart = [
+  '_RR__RR_',
+  'RRRRRRRR',
+  'RRRRRRRR',
+  'RRRRRRRR',
+  '_RRRRRR_',
+  '__RRRR__',
+  '___RR___',
+  '________',
+];
+
+// Cage (14x14)
+const sprCage = [
+  '_DDDDDDDDDDDD_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_D__D__D__D__D_',
+  '_DDDDDDDDDDDD_',
+  '_______________',
+];
+
+// ============================================================
+// SPRITE RENDERER
+// ============================================================
+function drawSprite(spr, x, y, scale = 1, flipX = false) {
+  const pw = scale; // pixel width
+  for (let row = 0; row < spr.length; row++) {
+    for (let col = 0; col < spr[row].length; col++) {
+      const ch = spr[row][col];
+      if (ch === '_' || ch === ' ') continue;
+      const color = C[ch];
+      if (!color) continue;
+      ctx.fillStyle = color;
+      const dx = flipX ? (spr[row].length - 1 - col) * pw : col * pw;
+      ctx.fillRect(Math.floor(x + dx), Math.floor(y + row * pw), pw, pw);
+    }
+  }
+}
+
+// ============================================================
+// PARTICLE SYSTEM
+// ============================================================
+let particles = [];
+
+function spawnParticles(x, y, color, count = 8, speed = 2) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed * (0.5 + Math.random()),
+      vy: Math.sin(angle) * speed * (0.5 + Math.random()) - 1,
+      life: 1,
+      color,
+      size: 2 + Math.random() * 2,
+    });
+  }
+}
+
+function spawnConfetti(x, y, count = 20) {
+  const colors = ['#ff3333', '#ffcc00', '#44cc44', '#4a5dbd', '#ff6b7a', '#ff8800', '#fff'];
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: x + Math.random() * 100 - 50,
+      y,
+      vx: Math.random() * 4 - 2,
+      vy: -Math.random() * 4 - 1,
+      life: 2,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: 2 + Math.random() * 3,
+      gravity: true,
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    if (p.gravity) p.vy += 0.1 * dt * 60;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, p.life * 2);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), Math.ceil(p.size), Math.ceil(p.size));
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// SCREEN SHAKE
+// ============================================================
+let shakeAmount = 0;
+let shakeDur = 0;
+function screenShake(amount, dur) { shakeAmount = amount; shakeDur = dur; }
+
+// ============================================================
+// INPUT SYSTEM
+// ============================================================
+let jumpPressed = false;
+let jumpJustPressed = false;
+let _jumpWasPressed = false;
+let leftPressed = false;
+let rightPressed = false;
+
+function onInput() {
+  ensureAudio();
+  jumpPressed = true;
+}
+function onInputUp() { jumpPressed = false; }
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') { e.preventDefault(); onInput(); }
+  if (e.code === 'ArrowLeft' || e.code === 'KeyA') { e.preventDefault(); leftPressed = true; }
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') { e.preventDefault(); rightPressed = true; }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') onInputUp();
+  if (e.code === 'ArrowLeft' || e.code === 'KeyA') leftPressed = false;
+  if (e.code === 'ArrowRight' || e.code === 'KeyD') rightPressed = false;
+});
+// Multi-touch support for iPad — track all active touches
+let activeTouches = {};
+
+function classifyTouch(e, touch) {
+  const rect = canvas.getBoundingClientRect();
+  const tapX = (touch.clientX - rect.left) / rect.width;
+  const tapY = (touch.clientY - rect.top) / rect.height;
+  if (state === BOSS && tapY > 0.6) {
+    if (tapX < 0.26) return 'left';
+    if (tapX < 0.52) return 'right';
+  }
+  return 'jump';
+}
+
+function updateTouchState() {
+  let l = false, r = false, j = false;
+  for (const id in activeTouches) {
+    const role = activeTouches[id];
+    if (role === 'left') l = true;
+    if (role === 'right') r = true;
+    if (role === 'jump') j = true;
+  }
+  leftPressed = l || leftPressed; // keep keyboard state too
+  rightPressed = r || rightPressed;
+  if (j && !jumpPressed) onInput();
+  if (!j && jumpPressed) onInputUp();
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  ensureAudio();
+  for (const touch of e.changedTouches) {
+    activeTouches[touch.identifier] = classifyTouch(e, touch);
+  }
+  updateTouchState();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    activeTouches[touch.identifier] = classifyTouch(e, touch);
+  }
+  updateTouchState();
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const touch of e.changedTouches) {
+    delete activeTouches[touch.identifier];
+  }
+  // Recalculate from remaining touches
+  leftPressed = false; rightPressed = false;
+  jumpPressed = false;
+  for (const id in activeTouches) {
+    const role = activeTouches[id];
+    if (role === 'left') leftPressed = true;
+    if (role === 'right') rightPressed = true;
+    if (role === 'jump') jumpPressed = true;
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', e => {
+  activeTouches = {};
+  leftPressed = false; rightPressed = false;
+  onInputUp();
+});
+
+// Fallback for mouse (testing on desktop)
+canvas.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') return; // handled by touch events
+  e.preventDefault();
+  onInput();
+});
+canvas.addEventListener('pointerup', e => {
+  if (e.pointerType === 'touch') return;
+  e.preventDefault();
+  onInputUp();
+});
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const TITLE = 0, PLAYING = 1, LEVEL_COMPLETE = 2, VICTORY = 3, BOSS = 4;
+let state = TITLE;
+let currentLevel = 0;
+let totalStars = 0;
+let levelStars = 0;
+let rescuedFriends = [];
+
+// Player
+let player = {};
+function resetPlayer(x, y) {
+  player = {
+    x: x || 40, y: y || 180,
+    vx: 0, vy: 0,
+    w: 14, h: 14,
+    onGround: false,
+    jumpHeld: false,
+    jumpTime: 0,
+    coyoteTime: 0,
+    safeX: x || 40, safeY: y || 180,
+    invincible: 0,
+    runSpeed: 70,
+    pauseTimer: 0, // brief pause after respawn
+    frame: 0,
+    frameTimer: 0,
+  };
+}
+
+// Camera
+let camX = 0;
+
+// Level data
+let platforms = [];
+let stars = [];
+let robots = [];
+let mushrooms = [];
+let clouds = []; // moving cloud platforms
+let cage = null;
+let friendType = null;
+let levelWidth = 0;
+let tutorialArrows = [];
+
+// Boss fight
+let boss = {};
+function resetBoss() {
+  boss = {
+    x: 0, y: 0, w: 18, h: 22,
+    hp: 3, maxHp: 3,
+    vx: 0, vy: 0,
+    phase: 0,
+    timer: 0,
+    hit: false,
+    hitTimer: 0,
+    defeated: false,
+    defeatTimer: 0,
+    onGround: false,
+    pieces: [],
+  };
+}
+
+// ============================================================
+// LEVEL DEFINITIONS
+// ============================================================
+const TILE = 16;
+const GROUND_Y = 220;
+
+function buildLevel(n) {
+  platforms = [];
+  stars = [];
+  robots = [];
+  mushrooms = [];
+  clouds = [];
+  cage = null;
+  tutorialArrows = [];
+  levelStars = 0;
+  particles = [];
+
+  switch (n) {
+    case 0: buildLevel1(); break;
+    case 1: buildLevel2(); break;
+    case 2: buildLevel3(); break;
+    case 3: buildLevel4(); break;
+  }
+}
+
+function addGround(x, w) {
+  platforms.push({ x, y: GROUND_Y, w, h: 50, type: 'ground' });
+}
+function addPlat(x, y, w) {
+  platforms.push({ x, y, w, h: TILE, type: 'platform' });
+}
+function addStar(x, y) {
+  stars.push({ x, y, collected: false, sparkle: 0 });
+}
+function addRobot(x, y, patrol = 60) {
+  robots.push({ x, y, startX: x, w: 12, h: 12, patrol, dir: 1, speed: 30, ko: false, koTimer: 0, vy: 0 });
+}
+function addMushroom(x, y) {
+  mushrooms.push({ x, y, w: 10, h: 8, bounce: 0 });
+}
+
+// Level 1: Green Meadow
+function buildLevel1() {
+  levelWidth = 2400;
+  friendType = sprBunny;
+
+  // Ground segments with small gaps
+  addGround(0, 500);
+  addGround(530, 400);
+  addGround(960, 500);
+  addGround(1490, 410);
+  addGround(1930, 470);
+
+  // Floating platforms
+  addPlat(200, 175, 64);
+  addPlat(350, 150, 48);
+  addPlat(550, 170, 64);
+  addPlat(750, 155, 48);
+  addPlat(1000, 170, 80);
+  addPlat(1200, 150, 64);
+  addPlat(1550, 175, 48);
+  addPlat(1700, 155, 64);
+  addPlat(2000, 165, 80);
+
+  // Stars
+  addStar(220, 155); addStar(260, 155);
+  addStar(370, 130); addStar(565, 150);
+  addStar(770, 135);
+  addStar(1030, 145); addStar(1060, 145);
+  addStar(1220, 130);
+  addStar(1570, 155); addStar(1720, 135);
+  addStar(2030, 140); addStar(2060, 140);
+
+  // Robots
+  addRobot(600, GROUND_Y - 12, 60);
+  addRobot(1100, GROUND_Y - 12, 80);
+
+  // Cage at end
+  cage = { x: 2300, y: GROUND_Y - 28, w: 15, h: 14, opened: false, timer: 0 };
+
+  // Tutorial arrows
+  tutorialArrows = [
+    { x: 100, y: 140, text: 'TAP TO JUMP!', timer: 0 },
+  ];
+
+  resetPlayer(40, GROUND_Y - 16);
+}
+
+// Level 2: Crystal Cave
+function buildLevel2() {
+  levelWidth = 2600;
+  friendType = sprFox;
+
+  addGround(0, 400);
+  addGround(430, 350);
+  addGround(820, 380);
+  addGround(1240, 340);
+  addGround(1620, 380);
+  addGround(2050, 550);
+
+  addPlat(300, 170, 48);
+  addPlat(420, 145, 64);
+  addPlat(600, 165, 48);
+  addPlat(900, 175, 64);
+  addPlat(1050, 150, 48);
+  addPlat(1350, 170, 64);
+  addPlat(1500, 145, 48);
+  addPlat(1730, 160, 80);
+  addPlat(1900, 140, 48);
+  addPlat(2150, 165, 80);
+
+  // Mushrooms (bouncy!) — placed on solid ground
+  addMushroom(380, GROUND_Y - 8);
+  addMushroom(840, GROUND_Y - 8);
+  addMushroom(1260, GROUND_Y - 8);
+  addMushroom(1640, GROUND_Y - 8);
+
+  // Stars
+  addStar(320, 150); addStar(440, 110); addStar(620, 145);
+  addStar(920, 155); addStar(1070, 130);
+  addStar(1370, 150); addStar(1520, 125);
+  addStar(1750, 130); addStar(1780, 130);
+  addStar(1920, 110); addStar(2180, 140);
+
+  // Robots
+  addRobot(550, GROUND_Y - 12, 50);
+  addRobot(950, GROUND_Y - 12, 70);
+  addRobot(1400, GROUND_Y - 12, 60);
+
+  cage = { x: 2500, y: GROUND_Y - 28, w: 15, h: 14, opened: false, timer: 0 };
+  resetPlayer(40, GROUND_Y - 16);
+}
+
+// Level 3: Sky Bridge
+function buildLevel3() {
+  levelWidth = 2200;
+  friendType = sprBear;
+
+  // Ground segments break up the sky sections so it's not one huge gap
+  addGround(0, 300);
+  addGround(580, 200);
+  addGround(1060, 200);
+  addGround(1540, 200);
+  addGround(1960, 240);
+
+  // Platforms bridging the sky gaps (max 30px between platform edges)
+  // Gap 1: x300 to x580
+  addPlat(280, 190, 50);
+  addPlat(340, 180, 50);
+  addPlat(400, 185, 50);
+  addPlat(460, 175, 50);
+  addPlat(520, 185, 60);
+
+  // Gap 2: x780 to x1060
+  addPlat(760, 190, 50);
+  addPlat(820, 178, 50);
+  addPlat(880, 185, 50);
+  addPlat(940, 172, 50);
+  addPlat(1000, 182, 60);
+
+  // Gap 3: x1260 to x1540
+  addPlat(1240, 188, 50);
+  addPlat(1300, 175, 50);
+  addPlat(1360, 182, 50);
+  addPlat(1420, 170, 50);
+  addPlat(1480, 180, 60);
+
+  // Gap 4: x1740 to x1960
+  addPlat(1720, 185, 50);
+  addPlat(1780, 175, 50);
+  addPlat(1840, 180, 50);
+  addPlat(1900, 185, 60);
+
+  // Moving cloud platforms (gentle movement, wide clouds, act as extra help)
+  clouds.push({ x: 370, y: 190, w: 56, h: 12, startX: 370, range: 15, speed: 12, dir: 1 });
+  clouds.push({ x: 860, y: 190, w: 56, h: 12, startX: 860, range: 15, speed: 14, dir: -1 });
+  clouds.push({ x: 1340, y: 188, w: 56, h: 12, startX: 1340, range: 15, speed: 12, dir: 1 });
+  clouds.push({ x: 1820, y: 188, w: 56, h: 12, startX: 1820, range: 15, speed: 14, dir: -1 });
+
+  // Stars along the path
+  addStar(300, 165); addStar(360, 158);
+  addStar(420, 160); addStar(480, 150);
+  addStar(540, 160);
+  addStar(650, 200); addStar(700, 200);
+  addStar(780, 168); addStar(840, 155);
+  addStar(960, 148);
+  addStar(1120, 200); addStar(1180, 200);
+  addStar(1260, 165); addStar(1320, 152);
+  addStar(1440, 145);
+  addStar(1600, 200);
+  addStar(1740, 162); addStar(1860, 155);
+  addStar(2020, 200); addStar(2060, 200);
+
+  // Robots on ground segments (not in the sky)
+  addRobot(650, GROUND_Y - 12, 50);
+  addRobot(1600, GROUND_Y - 12, 50);
+
+  cage = { x: 2120, y: GROUND_Y - 28, w: 15, h: 14, opened: false, timer: 0 };
+  resetPlayer(40, GROUND_Y - 16);
+}
+
+// Level 4: King Viking's Castle (Boss Fight)
+function buildLevel4() {
+  levelWidth = 800;
+  friendType = sprCat;
+
+  // Boss arena
+  addGround(0, 800);
+  addPlat(100, 170, 80);
+  addPlat(300, 155, 64);
+  addPlat(500, 170, 80);
+  addPlat(200, 130, 48);
+  addPlat(450, 125, 48);
+
+  resetBoss();
+  boss.x = 600;
+  boss.y = GROUND_Y - 22;
+  boss.vx = -40;
+
+  cage = { x: 650, y: GROUND_Y - 28, w: 15, h: 14, opened: false, timer: 0 };
+  resetPlayer(40, GROUND_Y - 16);
+}
+
+// ============================================================
+// LEVEL BACKGROUND COLORS
+// ============================================================
+const levelBGs = [
+  { sky: '#87ceeb', ground: '#4a8c3f', groundDark: '#3a7030', hills: '#5da050', hillsDark: '#4a8c3f' },
+  { sky: '#2a1a4e', ground: '#4a3a6e', groundDark: '#3a2a5e', hills: '#3a2a5e', hillsDark: '#2a1a4e' },
+  { sky: '#ffa07a', ground: '#87ceeb', groundDark: '#6baacc', hills: '#dda0dd', hillsDark: '#cc90cc' },
+  { sky: '#333', ground: '#555', groundDark: '#444', hills: '#444', hillsDark: '#333' },
+];
+
+// ============================================================
+// GAME LOGIC
+// ============================================================
+
+function updateLevelPanel() {
+  document.querySelectorAll('.level-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.level) === currentLevel);
+  });
+}
+
+function startLevel(n) {
+  currentLevel = n;
+  buildLevel(n);
+  camX = 0;
+  gameTime = 0;
+  state = (n === 3) ? BOSS : PLAYING;
+  updateLevelPanel();
+}
+
+function startGame() {
+  totalStars = 0;
+  rescuedFriends = [];
+  startLevel(0);
+}
+
+// Level panel click handlers
+document.querySelectorAll('.level-btn').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    ensureAudio();
+    const lvl = parseInt(btn.dataset.level);
+    totalStars = 0;
+    rescuedFriends = [];
+    startLevel(lvl);
+  });
+});
+
+// Physics constants
+const GRAVITY = 600;
+const JUMP_VEL = -210;
+const JUMP_HOLD_TIME = 0.2;
+const COYOTE_TIME = 0.08;
+const MAX_FALL = 400;
+
+function updatePlayer(dt) {
+  const p = player;
+
+  // Boss level: manual left/right control, no auto-run
+  if (state === BOSS) {
+    p.vx = 0;
+    if (leftPressed) p.vx = -p.runSpeed;
+    if (rightPressed) p.vx = p.runSpeed;
+    // Clamp to arena
+    if (p.x < 5) p.x = 5;
+    if (p.x > levelWidth - p.w - 5) p.x = levelWidth - p.w - 5;
+  } else if (p.pauseTimer > 0) {
+    // Pause timer (after pit respawn, briefly stop so player can react)
+    p.pauseTimer -= dt;
+    p.vx = 0;
+  } else {
+    // Auto-run
+    p.vx = p.runSpeed;
+  }
+
+  // Jump input
+  jumpJustPressed = jumpPressed && !_jumpWasPressed;
+
+  // Coyote time
+  if (p.onGround) {
+    p.coyoteTime = COYOTE_TIME;
+  } else {
+    p.coyoteTime -= dt;
+  }
+
+  // Jump start
+  if (jumpJustPressed && p.coyoteTime > 0) {
+    p.vy = JUMP_VEL;
+    p.jumpHeld = true;
+    p.jumpTime = 0;
+    p.onGround = false;
+    p.coyoteTime = 0;
+    sfxJump();
+  }
+
+  // Variable height jump
+  if (p.jumpHeld && jumpPressed) {
+    p.jumpTime += dt;
+    if (p.jumpTime < JUMP_HOLD_TIME) {
+      p.vy = JUMP_VEL;
+    } else {
+      p.jumpHeld = false;
+    }
+  } else {
+    p.jumpHeld = false;
+  }
+
+  // Gravity
+  p.vy += GRAVITY * dt;
+  if (p.vy > MAX_FALL) p.vy = MAX_FALL;
+
+  // Move X
+  p.x += p.vx * dt;
+
+  // Collide X with platforms
+  for (const plat of platforms) {
+    if (aabb(p.x, p.y, p.w, p.h, plat.x, plat.y, plat.w, plat.h)) {
+      if (p.vx > 0) p.x = plat.x - p.w;
+      else p.x = plat.x + plat.w;
+    }
+  }
+
+  // Move Y
+  p.y += p.vy * dt;
+  p.onGround = false;
+
+  // Collide Y with platforms
+  for (const plat of [...platforms, ...clouds]) {
+    if (aabb(p.x, p.y, p.w, p.h, plat.x, plat.y, plat.w, plat.h)) {
+      if (p.vy > 0) {
+        // Only land on top
+        if (p.y + p.h - p.vy * dt <= plat.y + 4) {
+          p.y = plat.y - p.h;
+          p.vy = 0;
+          p.onGround = true;
+          p.safeX = p.x;
+          p.safeY = p.y;
+        }
+      } else if (p.vy < 0 && plat.type === 'ground') {
+        p.y = plat.y + plat.h;
+        p.vy = 0;
+      }
+    }
+  }
+
+  // Mushroom bounce
+  for (const m of mushrooms) {
+    if (aabb(p.x, p.y, p.w, p.h, m.x, m.y, m.w, m.h) && p.vy > 0) {
+      p.vy = JUMP_VEL * 1.4;
+      m.bounce = 0.3;
+      sfxJump();
+      spawnParticles(m.x + 5, m.y, '#ff6666', 4, 1.5);
+    }
+  }
+
+  // Pit respawn
+  if (p.y > H + 20) {
+    p.x = p.safeX;
+    p.y = p.safeY;
+    p.vy = 0;
+    p.vx = 0;
+    p.pauseTimer = 0.5; // brief pause so player can react before auto-run resumes
+    sfxHurt();
+    screenShake(3, 0.2);
+    spawnParticles(p.x + 7, p.y + 7, '#ffffff', 6, 2);
+  }
+
+  // Star collection
+  for (const s of stars) {
+    if (!s.collected && aabb(p.x, p.y, p.w, p.h, s.x, s.y, 8, 8)) {
+      s.collected = true;
+      levelStars++;
+      totalStars++;
+      sfxStar();
+      spawnParticles(s.x + 4, s.y + 4, '#ffd700', 6, 2);
+    }
+  }
+
+  // Robot interaction
+  for (const r of robots) {
+    if (r.ko) continue;
+    if (aabb(p.x, p.y, p.w, p.h, r.x, r.y, r.w, r.h)) {
+      if (p.vy > 0 && p.y + p.h - p.vy * dt < r.y + 4) {
+        // Bop from above
+        r.ko = true;
+        r.koTimer = 2;
+        r.vy = -100;
+        p.vy = JUMP_VEL * 0.7;
+        sfxBop();
+        screenShake(2, 0.15);
+        spawnParticles(r.x + 6, r.y + 6, '#ffcc00', 8, 2);
+      } else if (p.invincible <= 0) {
+        // Hit by robot — bounce back
+        p.x -= 30;
+        p.vy = -120;
+        p.invincible = 1;
+        sfxHurt();
+        screenShake(4, 0.3);
+      }
+    }
+  }
+
+  // Cage interaction
+  if (cage && !cage.opened && aabb(p.x, p.y, p.w, p.h, cage.x, cage.y, cage.w * 2, cage.h * 2)) {
+    if (state === BOSS && !boss.defeated) return; // can't open cage until boss is defeated
+    cage.opened = true;
+    cage.timer = 0;
+    sfxRescue();
+    spawnParticles(cage.x + 10, cage.y + 7, '#ffd700', 15, 3);
+    screenShake(3, 0.3);
+    p.runSpeed = 0; // stop
+  }
+
+  // Invincibility timer
+  if (p.invincible > 0) p.invincible -= dt;
+
+  // Animation
+  p.frameTimer += dt;
+  if (p.frameTimer > 0.15) { p.frameTimer = 0; p.frame = (p.frame + 1) % 2; }
+
+  _jumpWasPressed = jumpPressed;
+}
+
+function updateRobots(dt) {
+  for (const r of robots) {
+    if (r.ko) {
+      r.koTimer -= dt;
+      r.vy += 200 * dt;
+      r.y += r.vy * dt;
+      if (r.koTimer <= 0) {
+        // Respawn off-screen (remove effectively)
+        r.x = -100; r.y = -100;
+      }
+      continue;
+    }
+    r.x += r.speed * r.dir * dt;
+    if (r.x > r.startX + r.patrol || r.x < r.startX - r.patrol) r.dir *= -1;
+  }
+}
+
+function updateClouds(dt) {
+  for (const c of clouds) {
+    c.x += c.speed * c.dir * dt;
+    if (c.x > c.startX + c.range || c.x < c.startX - c.range) c.dir *= -1;
+  }
+}
+
+function updateMushrooms(dt) {
+  for (const m of mushrooms) {
+    if (m.bounce > 0) m.bounce -= dt;
+  }
+}
+
+function updateCage(dt) {
+  if (!cage || !cage.opened) return;
+  cage.timer += dt;
+  if (cage.timer > 2.5) {
+    if (state === BOSS) {
+      // Victory!
+      rescuedFriends.push(friendType);
+      state = VICTORY;
+      sfxVictory();
+      spawnConfetti(W / 2, H / 2, 50);
+    } else {
+      rescuedFriends.push(friendType);
+      state = LEVEL_COMPLETE;
+      sfxVictory();
+      spawnConfetti(W / 2, H / 3, 30);
+    }
+  }
+}
+
+// Boss logic
+function updateBoss(dt) {
+  if (boss.defeated) {
+    boss.defeatTimer += dt;
+    // Pieces fly off
+    for (const piece of boss.pieces) {
+      piece.x += piece.vx * dt;
+      piece.y += piece.vy * dt;
+      piece.vy += 200 * dt;
+      piece.rot += piece.vr * dt;
+    }
+    return;
+  }
+
+  // Boss moves back and forth
+  boss.x += boss.vx * dt;
+  if (boss.x < 100 || boss.x > 650) boss.vx *= -1;
+
+  // Boss gravity
+  boss.vy += GRAVITY * 0.5 * dt;
+  boss.y += boss.vy * dt;
+  boss.onGround = false;
+  for (const plat of platforms) {
+    if (aabb(boss.x, boss.y, boss.w, boss.h, plat.x, plat.y, plat.w, plat.h)) {
+      if (boss.vy > 0) {
+        boss.y = plat.y - boss.h;
+        boss.vy = 0;
+        boss.onGround = true;
+      }
+    }
+  }
+
+  // Boss jump occasionally
+  boss.timer += dt;
+  if (boss.timer > 2 && boss.onGround) {
+    boss.vy = -180;
+    boss.timer = 0;
+  }
+
+  // Hit timer
+  if (boss.hitTimer > 0) boss.hitTimer -= dt;
+
+  // Player bop boss
+  const p = player;
+  if (aabb(p.x, p.y, p.w, p.h, boss.x, boss.y, boss.w, boss.h)) {
+    if (p.vy > 0 && p.y + p.h - p.vy * dt < boss.y + 4 && boss.hitTimer <= 0) {
+      boss.hp--;
+      boss.hitTimer = 1;
+      p.vy = JUMP_VEL * 0.8;
+      sfxBossHit();
+      screenShake(5, 0.4);
+      spawnParticles(boss.x + 10, boss.y + 5, '#ffcc00', 12, 3);
+
+      // Spawn a piece flying off
+      boss.pieces.push({
+        x: boss.x + 10, y: boss.y + 5,
+        vx: (Math.random() - 0.5) * 200,
+        vy: -150 - Math.random() * 100,
+        rot: 0, vr: (Math.random() - 0.5) * 10,
+        type: 3 - boss.hp, // which piece
+      });
+
+      if (boss.hp <= 0) {
+        boss.defeated = true;
+        boss.defeatTimer = 0;
+        // More pieces
+        for (let i = 0; i < 5; i++) {
+          boss.pieces.push({
+            x: boss.x + Math.random() * 20, y: boss.y + Math.random() * 20,
+            vx: (Math.random() - 0.5) * 300,
+            vy: -200 - Math.random() * 150,
+            rot: 0, vr: (Math.random() - 0.5) * 15,
+            type: i,
+          });
+        }
+        spawnConfetti(boss.x + 10, boss.y, 30);
+        sfxVictory();
+        player.runSpeed = 0;
+        // Open the cage after delay
+        setTimeout(() => {
+          if (cage) { cage.opened = true; cage.timer = 0; sfxRescue(); }
+        }, 1500);
+      }
+    } else if (p.invincible <= 0 && boss.hitTimer <= 0) {
+      // Hit by boss
+      p.x -= 40;
+      p.vy = -150;
+      p.invincible = 1.5;
+      sfxHurt();
+      screenShake(4, 0.3);
+    }
+  }
+}
+
+function aabb(x1, y1, w1, h1, x2, y2, w2, h2) {
+  return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
+}
+
+// ============================================================
+// CAMERA
+// ============================================================
+function updateCamera() {
+  const targetX = player.x - W * 0.3;
+  camX += (targetX - camX) * 0.1;
+  if (camX < 0) camX = 0;
+  if (camX > levelWidth - W) camX = levelWidth - W;
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+
+function drawBackground(bg) {
+  // Sky
+  ctx.fillStyle = bg.sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // Parallax hills (layer 1 - far)
+  ctx.fillStyle = bg.hillsDark;
+  for (let i = -1; i < W / 80 + 2; i++) {
+    const hx = (i * 80 - (camX * 0.2) % 80);
+    drawHill(hx, GROUND_Y, 80, 50);
+  }
+
+  // Hills (layer 2 - near)
+  ctx.fillStyle = bg.hills;
+  for (let i = -1; i < W / 60 + 2; i++) {
+    const hx = (i * 60 - (camX * 0.4) % 60);
+    drawHill(hx + 20, GROUND_Y, 60, 30);
+  }
+
+  // Decorative clouds for sky level
+  if (currentLevel === 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    for (let i = 0; i < 8; i++) {
+      const cx = (i * 120 + 30 - (camX * 0.15) % 960 + 960) % (960) - 120;
+      ctx.fillRect(cx, 30 + i * 15 % 50, 60, 12);
+      ctx.fillRect(cx + 10, 22 + i * 15 % 50, 40, 12);
+    }
+  }
+
+  // Cave crystals for cave level
+  if (currentLevel === 1) {
+    for (let i = 0; i < 12; i++) {
+      const cx = (i * 100 + 50 - (camX * 0.3) % 1200 + 1200) % 1200 - 100;
+      ctx.fillStyle = i % 3 === 0 ? '#8844cc55' : i % 3 === 1 ? '#44cccc55' : '#cc448855';
+      drawCrystal(cx, 20 + (i * 37) % 60, 8 + (i * 13) % 12);
+    }
+  }
+
+  // Castle bricks for boss level
+  if (currentLevel === 3) {
+    ctx.fillStyle = '#44444480';
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 20; col++) {
+        const bx = col * 30 + (row % 2) * 15 - (camX * 0.1) % 30;
+        ctx.fillRect(bx, row * 28, 28, 26);
+      }
+    }
+  }
+}
+
+function drawHill(x, baseY, w, h) {
+  ctx.beginPath();
+  ctx.moveTo(x, baseY);
+  ctx.quadraticCurveTo(x + w / 2, baseY - h, x + w, baseY);
+  ctx.fill();
+}
+
+function drawCrystal(x, y, h) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x + 4, y);
+  ctx.lineTo(x + 8, y + h);
+  ctx.fill();
+}
+
+function drawGround(bg) {
+  for (const plat of platforms) {
+    if (plat.type === 'ground') {
+      const px = plat.x - camX;
+      ctx.fillStyle = bg.ground;
+      ctx.fillRect(px, plat.y, plat.w, plat.h);
+      // Top edge
+      ctx.fillStyle = bg.groundDark;
+      ctx.fillRect(px, plat.y, plat.w, 3);
+      // Grass tufts for meadow
+      if (currentLevel === 0) {
+        ctx.fillStyle = '#6ab04c';
+        for (let i = 0; i < plat.w; i += 8) {
+          ctx.fillRect(px + i, plat.y - 2, 3, 3);
+        }
+      }
+    } else {
+      const px = plat.x - camX;
+      ctx.fillStyle = currentLevel === 1 ? '#6a5a8e' : currentLevel === 3 ? '#666' : '#8B7355';
+      ctx.fillRect(px, plat.y, plat.w, plat.h);
+      ctx.fillStyle = currentLevel === 1 ? '#7a6a9e' : currentLevel === 3 ? '#777' : '#9B8365';
+      ctx.fillRect(px, plat.y, plat.w, 3);
+    }
+  }
+}
+
+function drawClouds() {
+  for (const c of clouds) {
+    const px = c.x - camX;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(px, c.y, c.w, c.h);
+    ctx.fillRect(px + 5, c.y - 4, c.w - 10, 4);
+    ctx.fillStyle = '#eee';
+    ctx.fillRect(px, c.y + c.h - 2, c.w, 2);
+  }
+}
+
+function drawStars() {
+  for (const s of stars) {
+    if (s.collected) continue;
+    const px = s.x - camX;
+    s.sparkle += 0.05;
+    const scale = 1 + Math.sin(s.sparkle * 5) * 0.1;
+    drawSprite(sprStar, px, s.y, 1);
+    // Sparkle effect
+    if (Math.sin(s.sparkle * 8) > 0.7) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(px + 3, s.y - 1, 2, 2);
+    }
+  }
+}
+
+function drawRobots() {
+  for (const r of robots) {
+    if (r.x < -100) continue;
+    const px = r.x - camX;
+    if (r.ko) {
+      // Draw spinning
+      ctx.save();
+      ctx.translate(px + 6, r.y + 6);
+      ctx.rotate(r.koTimer * 10);
+      drawSprite(sprRobotKO, -6, -6, 1);
+      ctx.restore();
+    } else {
+      drawSprite(sprRobot, px, r.y, 1, r.dir < 0);
+    }
+  }
+}
+
+function drawMushrooms() {
+  for (const m of mushrooms) {
+    const px = m.x - camX;
+    const squish = m.bounce > 0 ? Math.sin(m.bounce * 20) * 2 : 0;
+    drawSprite(sprMushroom, px, m.y + squish, 1);
+  }
+}
+
+function drawPlayer() {
+  const p = player;
+  const px = p.x - camX;
+
+  // Blink when invincible
+  if (p.invincible > 0 && Math.sin(p.invincible * 30) > 0) return;
+
+  const spr = p.onGround ? sprRabbit : sprRabbitJump;
+  drawSprite(spr, px, p.y, 1);
+
+  // Running dust particles
+  if (p.onGround && p.runSpeed > 0 && p.frame === 0) {
+    spawnParticles(px + 2, p.y + 13, '#ccc', 1, 0.5);
+  }
+}
+
+function drawCage() {
+  if (!cage) return;
+  const px = cage.x - camX;
+
+  if (cage.opened) {
+    // Draw freed friend
+    const bounce = Math.sin(cage.timer * 5) * 5;
+    drawSprite(friendType, px + 2, cage.y + 4 - Math.abs(bounce), 1);
+    // Hearts
+    if (cage.timer > 0.5) {
+      drawSprite(sprHeart, px - 5, cage.y - 10 + Math.sin(cage.timer * 3) * 3, 1);
+      drawSprite(sprHeart, px + 20, cage.y - 8 + Math.sin(cage.timer * 3 + 1) * 3, 1);
+    }
+  } else {
+    // Draw cage with friend inside
+    drawSprite(friendType, px + 2, cage.y + 4, 1);
+    drawSprite(sprCage, px - 2, cage.y - 2, 1);
+  }
+}
+
+function drawBoss() {
+  if (state !== BOSS && !(state === PLAYING && currentLevel === 3)) return;
+  if (boss.defeated && boss.defeatTimer > 1) {
+    // Draw defeated viking — just the orange face, spiral eyes, no suit
+    const px = boss.x - camX;
+    const bounce = Math.sin(boss.defeatTimer * 4) * 3;
+    ctx.fillStyle = '#ff8800'; // orange face
+    ctx.fillRect(px + 3, boss.y + 10 + bounce, 12, 10);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(px + 2, boss.y + 9 + bounce, 14, 1); // outline top
+    ctx.fillRect(px + 2, boss.y + 20 + bounce, 14, 1); // outline bottom
+    // Spiral eyes (magenta)
+    ctx.fillStyle = '#ff44ff';
+    ctx.fillRect(px + 5, boss.y + 13 + bounce, 3, 3);
+    ctx.fillRect(px + 11, boss.y + 13 + bounce, 3, 3);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(px + 6, boss.y + 14 + bounce, 1, 1);
+    ctx.fillRect(px + 12, boss.y + 14 + bounce, 1, 1);
+    // Wavy mouth
+    ctx.fillStyle = '#222';
+    ctx.fillRect(px + 6, boss.y + 18 + bounce, 6, 1);
+    // Speech bubble
+    if (boss.defeatTimer > 2) {
+      drawSpeechBubble(px + 10, boss.y + bounce, "Oh no!");
+    }
+  } else if (!boss.defeated) {
+    const px = boss.x - camX;
+    // Flash when hit
+    if (boss.hitTimer > 0.7) {
+      ctx.globalAlpha = 0.5 + Math.sin(boss.hitTimer * 40) * 0.5;
+    }
+    drawSprite(sprViking, px, boss.y, 1);
+    ctx.globalAlpha = 1;
+
+    // HP bar
+    const barW = 40;
+    const barH = 4;
+    const barX = px;
+    const barY = boss.y - 10;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(barX, barY, barW, barH);
+    ctx.fillStyle = '#ff3333';
+    ctx.fillRect(barX, barY, barW * (boss.hp / boss.maxHp), barH);
+  }
+
+  // Draw pieces flying off
+  for (const piece of boss.pieces) {
+    ctx.save();
+    ctx.translate(piece.x - camX, piece.y);
+    ctx.rotate(piece.rot);
+    ctx.fillStyle = piece.type < 3 ? '#888' : '#4a5dbd';
+    ctx.fillRect(-4, -4, 8, 8);
+    ctx.restore();
+  }
+}
+
+function drawSpeechBubble(x, y, text) {
+  ctx.fillStyle = '#fff';
+  const tw = text.length * 5 + 8;
+  ctx.fillRect(x - tw / 2, y - 18, tw, 14);
+  // Triangle
+  ctx.beginPath();
+  ctx.moveTo(x - 3, y - 4);
+  ctx.lineTo(x + 3, y - 4);
+  ctx.lineTo(x, y);
+  ctx.fill();
+  ctx.fillStyle = '#333';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, x, y - 8);
+}
+
+function drawTutorialArrows(dt) {
+  for (const a of tutorialArrows) {
+    a.timer += dt;
+    if (a.timer > 5) continue; // fade out
+    const px = a.x - camX;
+    if (px < -20 || px > W + 20) continue;
+    const bob = Math.sin(a.timer * 4) * 5;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(a.text, px, a.y + bob);
+    // Arrow pointing down
+    ctx.beginPath();
+    ctx.moveTo(px - 5, a.y + bob + 5);
+    ctx.lineTo(px + 5, a.y + bob + 5);
+    ctx.lineTo(px, a.y + bob + 12);
+    ctx.fill();
+  }
+}
+
+function drawHUD() {
+  // Star count
+  drawSprite(sprStar, 8, 8, 1);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('x ' + totalStars, 18, 17);
+
+  // Level name
+  const names = ['Green Meadow', 'Crystal Cave', 'Sky Bridge', "Viking's Castle"];
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(names[currentLevel], W - 8, 14);
+}
+
+function drawBossControls() {
+  // Large on-screen buttons sized for iPad touch
+  const btnW = W * 0.24;
+  const btnH = H * 0.35;
+  const btnY = H - btnH - 4;
+  const gap = 8;
+  const alpha = 0.3;
+  const r = 6; // corner radius
+
+  // Left button
+  ctx.fillStyle = leftPressed ? 'rgba(255,255,255,0.5)' : `rgba(255,255,255,${alpha})`;
+  roundRect(4, btnY, btnW, btnH, r);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('◀', 4 + btnW / 2, btnY + btnH / 2 + 10);
+
+  // Right button
+  ctx.fillStyle = rightPressed ? 'rgba(255,255,255,0.5)' : `rgba(255,255,255,${alpha})`;
+  roundRect(4 + btnW + gap, btnY, btnW, btnH, r);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('▶', 4 + btnW + gap + btnW / 2, btnY + btnH / 2 + 10);
+
+  // Jump button (big, bottom-right)
+  const jbtnW = btnW * 1.3;
+  ctx.fillStyle = jumpPressed ? 'rgba(255,215,0,0.55)' : 'rgba(255,215,0,0.3)';
+  roundRect(W - jbtnW - 4, btnY, jbtnW, btnH, r);
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('JUMP', W - jbtnW / 2 - 4, btnY + btnH / 2 + 6);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.fill();
+}
+
+// ============================================================
+// TITLE SCREEN
+// ============================================================
+let titleTimer = 0;
+
+function drawTitleScreen(dt) {
+  titleTimer += dt;
+
+  // Background
+  ctx.fillStyle = '#1a0a3e';
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars in background
+  for (let i = 0; i < 30; i++) {
+    const sx = (i * 47 + titleTimer * 10) % W;
+    const sy = (i * 31) % (H - 50);
+    ctx.fillStyle = Math.sin(titleTimer * 2 + i) > 0.5 ? '#ffd700' : '#fff';
+    ctx.fillRect(sx, sy, 2, 2);
+  }
+
+  // Ground
+  ctx.fillStyle = '#4a8c3f';
+  ctx.fillRect(0, H - 40, W, 40);
+  ctx.fillStyle = '#6ab04c';
+  for (let i = 0; i < W; i += 8) ctx.fillRect(i, H - 42, 3, 3);
+
+  // Title text
+  const titleY = 40 + Math.sin(titleTimer * 2) * 5;
+  ctx.textAlign = 'center';
+
+  // Shadow
+  ctx.fillStyle = '#ff3333';
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText('SUPER RABBIT BOY', W / 2 + 2, titleY + 2);
+  // Main
+  ctx.fillStyle = '#ffd700';
+  ctx.fillText('SUPER RABBIT BOY', W / 2, titleY);
+
+  // Subtitle
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('Save Animal Town!', W / 2, titleY + 28);
+
+  // Rabbit Boy on the ground
+  const rbX = W / 2 - 7;
+  const rbY = H - 56;
+  const rbBounce = Math.abs(Math.sin(titleTimer * 3)) * 5;
+  drawSprite(sprRabbit, rbX, rbY - rbBounce, 1);
+
+  // Animal friends on the sides
+  drawSprite(sprBunny, 60 + Math.sin(titleTimer * 2) * 3, H - 52, 1);
+  drawSprite(sprFox, 140, H - 52 + Math.sin(titleTimer * 2.2) * 3, 1);
+  drawSprite(sprBear, W - 170, H - 52 + Math.sin(titleTimer * 1.8) * 3, 1);
+  drawSprite(sprCat, W - 80 + Math.sin(titleTimer * 2.5) * 3, H - 52, 1);
+
+  // King Viking lurking
+  drawSprite(sprViking, W - 50, H - 60 + Math.sin(titleTimer * 1.5) * 2, 1);
+
+  // "TAP TO START" blinking
+  if (Math.sin(titleTimer * 4) > 0) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('TAP TO START', W / 2, H - 10);
+  }
+}
+
+// ============================================================
+// LEVEL COMPLETE SCREEN
+// ============================================================
+let lcTimer = 0;
+
+function drawLevelComplete(dt) {
+  lcTimer += dt;
+
+  // Darken
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+
+  // "LEVEL COMPLETE!"
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('LEVEL COMPLETE!', W / 2, 60);
+
+  // Stars
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px monospace';
+  ctx.fillText('Stars: ' + levelStars, W / 2, 95);
+
+  // Rescued friend
+  const friendNames = ['Bunny', 'Fox', 'Bear', 'Cat'];
+  ctx.fillStyle = '#88ee88';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText(friendNames[currentLevel] + ' Rescued!', W / 2, 125);
+
+  // Draw friend bouncing
+  const bounce = Math.sin(lcTimer * 4) * 8;
+  drawSprite(friendType, W / 2 - 6, 140 - Math.abs(bounce), 1);
+
+  // Hearts
+  if (lcTimer > 1) {
+    drawSprite(sprHeart, W / 2 - 20, 135 + Math.sin(lcTimer * 3) * 3, 1);
+    drawSprite(sprHeart, W / 2 + 14, 135 + Math.sin(lcTimer * 3 + 1) * 3, 1);
+  }
+
+  // Continue prompt
+  if (lcTimer > 2 && Math.sin(lcTimer * 4) > 0) {
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    ctx.fillText('TAP TO CONTINUE', W / 2, 220);
+  }
+
+  spawnConfetti(W / 2, 50, 1);
+}
+
+// ============================================================
+// VICTORY SCREEN
+// ============================================================
+let victoryTimer = 0;
+
+function drawVictoryScreen(dt) {
+  victoryTimer += dt;
+
+  // Rainbow background
+  const hue = (victoryTimer * 30) % 360;
+  ctx.fillStyle = `hsl(${hue}, 30%, 15%)`;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+
+  // Rainbow text
+  const text = 'YOU WIN!';
+  ctx.font = 'bold 32px monospace';
+  for (let i = 0; i < text.length; i++) {
+    const h = ((i / text.length) * 360 + victoryTimer * 100) % 360;
+    ctx.fillStyle = `hsl(${h}, 100%, 60%)`;
+    ctx.fillText(text[i], W / 2 - 90 + i * 26, 55 + Math.sin(victoryTimer * 3 + i * 0.5) * 5);
+  }
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px monospace';
+  ctx.fillText('Animal Town is saved!', W / 2, 85);
+
+  ctx.fillStyle = '#ffd700';
+  ctx.font = '10px monospace';
+  ctx.fillText('Total Stars: ' + totalStars, W / 2, 105);
+
+  // All friends dancing
+  const friends = [sprBunny, sprFox, sprBear, sprCat];
+  const friendNames = ['Bunny', 'Fox', 'Bear', 'Cat'];
+  for (let i = 0; i < 4; i++) {
+    const fx = W / 2 - 90 + i * 55;
+    const fy = 145 + Math.sin(victoryTimer * 4 + i * 1.5) * 8;
+    drawSprite(friends[i], fx, fy, 1);
+    ctx.fillStyle = '#fff';
+    ctx.font = '7px monospace';
+    ctx.fillText(friendNames[i], fx + 6, fy + 20);
+  }
+
+  // Rabbit Boy in center
+  const rbBounce = Math.abs(Math.sin(victoryTimer * 5)) * 10;
+  drawSprite(sprRabbitJump, W / 2 - 7, 115 - rbBounce, 1);
+
+  // King Viking defeated on the side
+  const vkY = 175 + Math.sin(victoryTimer * 2) * 2;
+  ctx.fillStyle = '#ff8800';
+  ctx.fillRect(W - 55, vkY, 12, 10);
+  ctx.fillStyle = '#ff44ff';
+  ctx.fillRect(W - 53, vkY + 3, 2, 2);
+  ctx.fillRect(W - 48, vkY + 3, 2, 2);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(W - 52, vkY + 7, 6, 1);
+  drawSpeechBubble(W - 49, vkY - 5, "I'll be back!");
+
+  // Confetti
+  spawnConfetti(Math.random() * W, -10, 1);
+
+  // Play again
+  if (victoryTimer > 3 && Math.sin(victoryTimer * 4) > 0) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('TAP TO PLAY AGAIN', W / 2, H - 20);
+  }
+}
+
+// ============================================================
+// MAIN GAME LOOP
+// ============================================================
+let lastTime = 0;
+let gameTime = 0;
+
+function gameLoop(time) {
+  requestAnimationFrame(gameLoop);
+
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+  gameTime += dt;
+
+  // Screen shake
+  let sx = 0, sy = 0;
+  if (shakeDur > 0) {
+    sx = (Math.random() - 0.5) * shakeAmount * 2;
+    sy = (Math.random() - 0.5) * shakeAmount * 2;
+    shakeDur -= dt;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  switch (state) {
+    case TITLE:
+      drawTitleScreen(dt);
+      updateParticles(dt);
+      drawParticles();
+      if (jumpJustPressed) {
+        startGame();
+      }
+      // Update input state for title screen
+      jumpJustPressed = jumpPressed && !_jumpWasPressed;
+      _jumpWasPressed = jumpPressed;
+      break;
+
+    case PLAYING:
+      updatePlayer(dt);
+      updateRobots(dt);
+      updateClouds(dt);
+      updateMushrooms(dt);
+      updateCage(dt);
+      updateCamera();
+      updateParticles(dt);
+
+      drawBackground(levelBGs[currentLevel]);
+      drawGround(levelBGs[currentLevel]);
+      drawClouds();
+      drawMushrooms();
+      drawStars();
+      drawRobots();
+      drawCage();
+      drawPlayer();
+      drawParticles();
+      drawTutorialArrows(dt);
+      drawHUD();
+      break;
+
+    case BOSS:
+      updatePlayer(dt);
+      updateBoss(dt);
+      updateCage(dt);
+      updateCamera();
+      updateParticles(dt);
+
+      drawBackground(levelBGs[currentLevel]);
+      drawGround(levelBGs[currentLevel]);
+      drawStars();
+      drawCage();
+      drawBoss();
+      drawPlayer();
+      drawParticles();
+      drawHUD();
+
+      // Boss intro speech
+      if (gameTime < 2 && !boss.defeated) {
+        drawSpeechBubble(boss.x - camX + 10, boss.y - 15, "Ha ha ha!");
+      }
+
+      // On-screen touch controls
+      drawBossControls();
+
+      // Control hint
+      if (gameTime < 4) {
+        ctx.fillStyle = '#fff';
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Use arrows to move, TAP right side to jump!', W / 2, 25);
+      }
+      break;
+
+    case LEVEL_COMPLETE:
+      // Keep rendering level behind
+      drawBackground(levelBGs[currentLevel]);
+      drawGround(levelBGs[currentLevel]);
+      drawClouds();
+      drawMushrooms();
+      drawStars();
+      drawRobots();
+      drawCage();
+      drawPlayer();
+
+      drawLevelComplete(dt);
+      updateParticles(dt);
+      drawParticles();
+
+      jumpJustPressed = jumpPressed && !_jumpWasPressed;
+      _jumpWasPressed = jumpPressed;
+      if (jumpJustPressed && lcTimer > 2) {
+        lcTimer = 0;
+        if (currentLevel < 3) {
+          startLevel(currentLevel + 1);
+          gameTime = 0;
+        } else {
+          state = VICTORY;
+          victoryTimer = 0;
+        }
+      }
+      break;
+
+    case VICTORY:
+      drawVictoryScreen(dt);
+      updateParticles(dt);
+      drawParticles();
+
+      jumpJustPressed = jumpPressed && !_jumpWasPressed;
+      _jumpWasPressed = jumpPressed;
+      if (jumpJustPressed && victoryTimer > 3) {
+        state = TITLE;
+        titleTimer = 0;
+        victoryTimer = 0;
+      }
+      break;
+  }
+
+  ctx.restore();
+}
+
+// Start
+resetPlayer(40, GROUND_Y - 16);
+setTimeout(resize, 0); // re-measure after layout
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
