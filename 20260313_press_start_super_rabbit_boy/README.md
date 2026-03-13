@@ -1,5 +1,7 @@
 # Super Rabbit Boy: Save Animal Town!
 
+![Super Rabbit Boy Title Screen](screenshot.png)
+
 A one-button auto-runner platformer for young kids, inspired by Thomas Flintham's "Press Start" book series.
 
 ## How to Play
