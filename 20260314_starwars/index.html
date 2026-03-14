@@ -1,0 +1,1725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Star Wars: Executor Command</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+}
+#level-panel {
+  width: 150px;
+  min-width: 150px;
+  background: #0a0a1e;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  gap: 8px;
+  overflow-y: auto;
+  z-index: 10;
+  border-right: 3px solid #ff3333;
+}
+#level-panel h2 {
+  color: #ff3333;
+  font: bold 13px monospace;
+  text-align: center;
+  margin-bottom: 2px;
+  text-shadow: 0 0 8px #ff333366;
+}
+.level-btn {
+  background: #1a1a3e;
+  border: 2px solid #333366;
+  border-radius: 6px;
+  padding: 8px 6px;
+  color: #ccc;
+  font: bold 11px monospace;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.level-btn:hover {
+  background: #2a2a5e;
+  border-color: #ff3333;
+}
+.level-btn.active {
+  background: #2a1a3e;
+  border-color: #ff3333;
+  box-shadow: 0 0 8px #ff333366;
+  color: #fff;
+}
+.level-btn .level-icon {
+  font-size: 18px;
+  display: block;
+  margin-bottom: 3px;
+}
+.level-btn .level-name {
+  display: block;
+  font-size: 9px;
+  color: #999;
+  margin-top: 2px;
+}
+.level-btn.active .level-name {
+  color: #ff9999;
+}
+#canvas-wrap {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+canvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+</style>
+</head>
+<body>
+<div id="level-panel">
+  <h2>MISSIONS</h2>
+  <button class="level-btn active" data-level="0">
+    <span class="level-icon">🚀</span>
+    Mission 1
+    <span class="level-name">Outer Rim Patrol</span>
+  </button>
+  <button class="level-btn" data-level="1">
+    <span class="level-icon">☄️</span>
+    Mission 2
+    <span class="level-name">Asteroid Belt</span>
+  </button>
+  <button class="level-btn" data-level="2">
+    <span class="level-icon">🌌</span>
+    Mission 3
+    <span class="level-name">Nebula Battle</span>
+  </button>
+  <button class="level-btn" data-level="3">
+    <span class="level-icon">⚔️</span>
+    Mission 4
+    <span class="level-name">Rebel Fleet</span>
+  </button>
+  <button class="level-btn" data-level="4">
+    <span class="level-icon">🏆</span>
+    Mission 5
+    <span class="level-name">Millennium Falcon</span>
+  </button>
+</div>
+<div id="canvas-wrap">
+  <canvas id="c"></canvas>
+</div>
+<script>
+// ============================================================
+// STAR WARS: EXECUTOR COMMAND
+// A kid-friendly space shooter for Bobo
+// ============================================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 480, H = 270;
+canvas.width = W; canvas.height = H;
+
+// Responsive scaling
+function resize() {
+  const wrap = document.getElementById('canvas-wrap');
+  const s = Math.min(wrap.clientWidth / W, wrap.clientHeight / H);
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// AUDIO SYSTEM
+// ============================================================
+let audioCtx;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playTone(freq, dur, type = 'square', vol = 0.12, slide = 0) {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audioCtx.currentTime + dur);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+
+function sfxPlayerShoot() { playTone(880, 0.08, 'square', 0.08, 200); }
+function sfxEnemyShoot() { playTone(220, 0.1, 'sawtooth', 0.06, -80); }
+function sfxHit() { playTone(150, 0.2, 'sawtooth', 0.1, -50); }
+function sfxExplosion() {
+  playTone(100, 0.3, 'sawtooth', 0.12, -80);
+  setTimeout(() => playTone(60, 0.2, 'square', 0.08, -30), 50);
+}
+function sfxShieldAbsorb() { playTone(300, 0.15, 'triangle', 0.1, 100); }
+function sfxPowerUp() {
+  [523, 659, 784].forEach((f, i) => setTimeout(() => playTone(f, 0.15, 'square', 0.1), i * 80));
+}
+function sfxBossHit() { playTone(80, 0.4, 'sawtooth', 0.15, 40); }
+function sfxHyperspace() {
+  for (let i = 0; i < 10; i++) {
+    setTimeout(() => playTone(200 + i * 100, 0.15, 'sine', 0.08, 500), i * 50);
+  }
+}
+function sfxWaveComplete() {
+  [392, 494, 587, 784].forEach((f, i) => setTimeout(() => playTone(f, 0.2, 'square', 0.1), i * 100));
+}
+function sfxImperialMarch() {
+  const notes = [
+    [392, 0.4], [392, 0.4], [392, 0.4],
+    [311, 0.3], [466, 0.1], [392, 0.4],
+    [311, 0.3], [466, 0.1], [392, 0.6],
+    [587, 0.4], [587, 0.4], [587, 0.4],
+    [622, 0.3], [466, 0.1], [370, 0.4],
+    [311, 0.3], [466, 0.1], [392, 0.6],
+  ];
+  let t = 0;
+  notes.forEach(([freq, dur]) => {
+    setTimeout(() => playTone(freq, dur * 0.9, 'square', 0.12), t * 1000);
+    t += dur;
+  });
+}
+
+// ============================================================
+// PALETTES & COLORS
+// ============================================================
+const C = {
+  _: null,
+  K: '#222',     // black outline
+  W: '#fff',     // white
+  G: '#888',     // gray (ship hull)
+  g: '#aaa',     // light gray
+  D: '#555',     // dark gray
+  d: '#666',     // medium dark gray
+  R: '#ff3333',  // red (enemy lasers)
+  r: '#ff6666',  // light red
+  B: '#4488ff',  // blue (rebel ships)
+  b: '#6699ff',  // light blue
+  N: '#1a1a3e',  // navy
+  n: '#2a2a5e',  // light navy
+  E: '#44ff44',  // green (player lasers)
+  e: '#88ff88',  // light green
+  O: '#ff8800',  // orange (engines)
+  o: '#ffaa44',  // light orange
+  Y: '#ffcc00',  // yellow
+  y: '#ffee66',  // light yellow
+  P: '#cc44ff',  // purple
+  p: '#dd88ff',  // light purple
+  T: '#00cccc',  // teal
+  t: '#44eeff',  // light teal
+  S: '#c0c0c0',  // silver
+  s: '#e0e0e0',  // light silver
+  M: '#cc22cc',  // magenta
+};
+
+// ============================================================
+// SPRITES (ASCII pixel art)
+// ============================================================
+
+// Executor Star Destroyer (20x24) - Frame 1
+const sprExecutor1 = [
+  '________GG__________',
+  '________GG__________',
+  '_______GGGG_________',
+  '_______GGGG_________',
+  '______GGGGGG________',
+  '______GGggGG________',
+  '_____GGGggGGG_______',
+  '_____GGGGgGGG_______',
+  '____GGGGGgGGGG______',
+  '____GGGGggGGGG______',
+  '___GGGGGggGGGGG_____',
+  '___GGGDDDDDdGGG_____',
+  '__GGGGDWWWWdGGGG____',
+  '__GGGGDDDDDdGGGG____',
+  '_GGGGGGGggGGGGGGG___',
+  '_GGGGGGGggGGGGGGG___',
+  'GGGGGGGGggGGGGGGGG__',
+  'GGGGGGGGggGGGGGGGG__',
+  '_GGGGGGGggGGGGGGG___',
+  '__GGGGGGggGGGGGG____',
+  '____GGGGggGGGG______',
+  '_____OOOooOOO_______',
+  '_____OOOooOOO_______',
+  '______OooooO________',
+];
+
+// Executor Frame 2 (engines flicker)
+const sprExecutor2 = [
+  '________GG__________',
+  '________GG__________',
+  '_______GGGG_________',
+  '_______GGGG_________',
+  '______GGGGGG________',
+  '______GGggGG________',
+  '_____GGGggGGG_______',
+  '_____GGGGgGGG_______',
+  '____GGGGGgGGGG______',
+  '____GGGGggGGGG______',
+  '___GGGGGggGGGGG_____',
+  '___GGGDDDDDdGGG_____',
+  '__GGGGDWWWWdGGGG____',
+  '__GGGGDDDDDdGGGG____',
+  '_GGGGGGGggGGGGGGG___',
+  '_GGGGGGGggGGGGGGG___',
+  'GGGGGGGGggGGGGGGGG__',
+  'GGGGGGGGggGGGGGGGG__',
+  '_GGGGGGGggGGGGGGG___',
+  '__GGGGGGggGGGGGG____',
+  '____GGGGggGGGG______',
+  '_____YooooYYY_______',
+  '______YYooYY________',
+  '_______oooo_________',
+];
+
+// X-wing (12x12) - flies downward, so nose is at top
+const sprXwing = [
+  '____BB______',
+  '___BBBB_____',
+  'BB_BBBB_BB__',
+  'BBBBBBBBBBB_',
+  'BB_BBBB_BB__',
+  '___BBBB_____',
+  '___BBBB_____',
+  '___BrrB_____',
+  '___BBBB_____',
+  'BB_BBBB_BB__',
+  'BBBBBBBBBBB_',
+  'BB_BBBB_BB__',
+];
+
+// A-wing (8x10) - small and fast
+const sprAwing = [
+  '___BB___',
+  '__BBBB__',
+  '__BBBB__',
+  '_BBBBBB_',
+  'BBBRRBB_',
+  '_BBBBBB_',
+  '__BBBB__',
+  '__B__B__',
+  '_BB__BB_',
+  '________',
+];
+
+// Y-wing (10x14) - heavy bomber
+const sprYwing = [
+  '____BB____',
+  '____BB____',
+  '___BBBB___',
+  '___BBBB___',
+  'BB_BBBB_BB',
+  'BBBBBBBBB_',
+  'BB_BrrB_BB',
+  '___BBBB___',
+  '___BBBB___',
+  '___BBBB___',
+  '___BBBB___',
+  '___BBBB___',
+  '__BB__BB__',
+  '__OO__OO__',
+];
+
+// B-wing (10x16) - tough fighter
+const sprBwing = [
+  '____BB____',
+  '___BBBB___',
+  '___BBBB___',
+  '__BBBBBB__',
+  '_BBBRRBB__',
+  '__BBBBBB__',
+  'BBBBBBBBBB',
+  'BBBBBBBBB_',
+  '__BBBBBB__',
+  '___BBBB___',
+  '___BBBB___',
+  '___BBBB___',
+  '___BBBB___',
+  '__BB__BB__',
+  '__OO__OO__',
+  '____OO____',
+];
+
+// Millennium Falcon (24x24) - Frame 1
+const sprFalcon1 = [
+  '________GGGGGG__________',
+  '______GGGGGGGGGG________',
+  '____GGGGGGGGGGGGGG______',
+  '___GGGGGGggGGGGGGG_____',
+  '__GGGGGGGggGGGGGGGG____',
+  '__GGDDDDggggDDDDGGG____',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDDDDggggDDDDGGGG___',
+  'GGGGGGGGggggGGGGGGGGG__',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGGGGGGGGGGGGgG_',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGggggGGGGGGGGG_',
+  '_GGGDDDDggggDDDDGGGG___',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDDDDggggDDDDGGGG___',
+  '__GGGGGGGggGGGGGGGG____',
+  '___GGGGGGggGGGGGGG_____',
+  '____GGGGGGGGGGGGGG______',
+  '______GGGGGGGGGG________',
+];
+
+// Millennium Falcon Frame 2 (engines glow)
+const sprFalcon2 = [
+  '________GGGGGG__________',
+  '______GGGGGGGGGG________',
+  '____GGGGGGGGGGGGGG______',
+  '___GGGGGGggGGGGGGG_____',
+  '__GGGGGGGggGGGGGGGG____',
+  '__GGDDDDggggDDDDGGG____',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDDDDggggDDDDGGGG___',
+  'GGGGGGGGggggGGGGGGGGG__',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGGGGGGGGGGGGgG_',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGGggGGGGGGGGGG_',
+  'GGGGGGGGggggGGGGGGGGG_',
+  '_GGGDDDDggggDDDDGGGG___',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDWWWggggWWWDGGGG___',
+  '_GGGDDDDggggDDDDGGGG___',
+  '__GGGGGGGggGGGGGYYG____',
+  '___GGGGGGggGGGGYYY_____',
+  '____GGGGGGGGGGoYY______',
+  '______GGGGGGGGoO_______',
+];
+
+// Explosion frames
+const sprExplosion1 = [
+  '__Yr__rY__',
+  '_YOOrOOY__',
+  'YOOOoOOOY_',
+  'rOOOoOOOr_',
+  '_YOOrOOY__',
+  '__Yr__rY__',
+  '____r_____',
+  '__________',
+];
+
+const sprExplosion2 = [
+  'r__Y__Y__r',
+  '_rYOOOYr__',
+  '_YOooOOY__',
+  'YOoYYoOOY_',
+  '_YOooOOY__',
+  '_rYOOOYr__',
+  'r__Y__Y__r',
+  '__________',
+];
+
+// Power-up sprites (8x8)
+const sprPowerWeapon = [
+  '__EEEE__',
+  '_EEEEE__',
+  'EEEEEE__',
+  'EeEeEeE_',
+  'EEEEEE__',
+  '_EEEEE__',
+  '__EEEE__',
+  '________',
+];
+
+const sprPowerTorpedo = [
+  '__YYYY__',
+  '_YYYYYY_',
+  'YYYyYYY_',
+  'YyYYyYY_',
+  'YYYyYYY_',
+  '_YYYYYY_',
+  '__YYYY__',
+  '________',
+];
+
+const sprPowerShield = [
+  '__TTTT__',
+  '_TTTTTT_',
+  'TTtTtTT_',
+  'TTTtTTT_',
+  'TTtTtTT_',
+  '_TTTTTT_',
+  '__TTTT__',
+  '________',
+];
+
+// Shield icon for HUD (6x6)
+const sprShieldIcon = [
+  '_TTTT_',
+  'TTTTTT',
+  'TTtTTT',
+  'TTTTTT',
+  '_TTTT_',
+  '__TT__',
+];
+
+// ============================================================
+// SPRITE RENDERER
+// ============================================================
+function drawSprite(spr, x, y, scale = 1, flipX = false) {
+  const pw = scale;
+  for (let row = 0; row < spr.length; row++) {
+    for (let col = 0; col < spr[row].length; col++) {
+      const ch = spr[row][col];
+      if (ch === '_' || ch === ' ') continue;
+      const color = C[ch];
+      if (!color) continue;
+      ctx.fillStyle = color;
+      const dx = flipX ? (spr[row].length - 1 - col) * pw : col * pw;
+      ctx.fillRect(Math.floor(x + dx), Math.floor(y + row * pw), pw, pw);
+    }
+  }
+}
+
+// ============================================================
+// PARTICLE SYSTEM
+// ============================================================
+let particles = [];
+
+function spawnParticles(x, y, color, count = 8, speed = 2) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed * (0.5 + Math.random()),
+      vy: Math.sin(angle) * speed * (0.5 + Math.random()),
+      life: 0.6 + Math.random() * 0.4,
+      color,
+      size: 2 + Math.random() * 2,
+    });
+  }
+}
+
+function spawnConfetti(x, y, count = 30) {
+  const colors = ['#ff3333', '#ffcc00', '#44ff44', '#4488ff', '#ff8800', '#cc44ff', '#fff'];
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: x + Math.random() * 200 - 100,
+      y,
+      vx: Math.random() * 4 - 2,
+      vy: -Math.random() * 4 - 1,
+      life: 2 + Math.random(),
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: 2 + Math.random() * 3,
+      gravity: true,
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    if (p.gravity) p.vy += 0.1 * dt * 60;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.min(1, p.life * 2);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.floor(p.x), Math.floor(p.y), Math.ceil(p.size), Math.ceil(p.size));
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// SCREEN SHAKE
+// ============================================================
+let shakeAmount = 0;
+let shakeDur = 0;
+function screenShake(amount, dur) { shakeAmount = amount; shakeDur = dur; }
+
+// ============================================================
+// STARFIELD
+// ============================================================
+const starLayers = [[], [], []];
+function initStarfield() {
+  for (let layer = 0; layer < 3; layer++) {
+    starLayers[layer] = [];
+    const count = 30 + layer * 20;
+    for (let i = 0; i < count; i++) {
+      starLayers[layer].push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        size: layer === 0 ? 1 : (layer === 1 ? 1 : 2),
+        speed: (layer + 1) * 15,
+        brightness: 0.3 + layer * 0.25,
+      });
+    }
+  }
+}
+initStarfield();
+
+function updateStarfield(dt) {
+  for (let layer = 0; layer < 3; layer++) {
+    for (const star of starLayers[layer]) {
+      star.y += star.speed * dt;
+      if (star.y > H) {
+        star.y = -2;
+        star.x = Math.random() * W;
+      }
+    }
+  }
+}
+
+function drawStarfield() {
+  for (let layer = 0; layer < 3; layer++) {
+    for (const star of starLayers[layer]) {
+      ctx.globalAlpha = star.brightness + Math.sin(Date.now() * 0.003 + star.x) * 0.1;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(Math.floor(star.x), Math.floor(star.y), star.size, star.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================
+// INPUT SYSTEM
+// ============================================================
+const keys = {};
+
+document.addEventListener('keydown', e => {
+  ensureAudio();
+  keys[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+    e.preventDefault();
+  }
+  // Title screen: any key starts
+  if (state === TITLE && (e.code === 'Space' || e.code === 'Enter')) {
+    startMission(currentMission);
+  }
+  // Level complete / victory: Space to continue
+  if (state === LEVEL_COMPLETE && e.code === 'Space') {
+    if (currentMission < 4) {
+      currentMission++;
+      startMission(currentMission);
+    } else {
+      state = TITLE;
+    }
+    updateSidebarButtons();
+  }
+  if (state === VICTORY && e.code === 'Space') {
+    state = TITLE;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  keys[e.code] = false;
+});
+
+// Touch input
+let touchActive = false;
+let touchX = 0, touchY = 0;
+
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  ensureAudio();
+  const rect = canvas.getBoundingClientRect();
+  touchX = (e.clientX - rect.left) / rect.width * W;
+  touchY = (e.clientY - rect.top) / rect.height * H;
+  touchActive = true;
+
+  if (state === TITLE) {
+    startMission(currentMission);
+  }
+  if (state === LEVEL_COMPLETE) {
+    if (currentMission < 4) {
+      currentMission++;
+      startMission(currentMission);
+    } else {
+      state = TITLE;
+    }
+    updateSidebarButtons();
+  }
+  if (state === VICTORY) {
+    state = TITLE;
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!touchActive) return;
+  const rect = canvas.getBoundingClientRect();
+  touchX = (e.clientX - rect.left) / rect.width * W;
+  touchY = (e.clientY - rect.top) / rect.height * H;
+});
+
+canvas.addEventListener('pointerup', e => {
+  e.preventDefault();
+  touchActive = false;
+});
+
+canvas.addEventListener('pointercancel', () => { touchActive = false; });
+
+function isUp() { return keys['ArrowUp'] || keys['KeyW']; }
+function isDown() { return keys['ArrowDown'] || keys['KeyS']; }
+function isLeft() { return keys['ArrowLeft'] || keys['KeyA']; }
+function isRight() { return keys['ArrowRight'] || keys['KeyD']; }
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const TITLE = 0, PLAYING = 1, LEVEL_COMPLETE = 2, VICTORY = 3;
+let state = TITLE;
+let currentMission = 0;
+let score = 0;
+let gameTime = 0;
+
+// Player
+let player = {};
+function resetPlayer() {
+  player = {
+    x: W / 2 - 10, y: H - 50,
+    w: 20, h: 24,
+    hitW: 10, hitH: 12, // smaller hitbox for forgiveness
+    shields: 5,
+    maxShields: 5,
+    invincible: 0,
+    weaponLevel: 1, // 1=single, 2=double, 3=triple
+    torpedoes: 0,
+    shootTimer: 0,
+    shootInterval: 0.25,
+    frame: 0,
+    frameTimer: 0,
+    speed: 120,
+  };
+}
+
+// Bullets
+let playerBullets = [];
+let enemyBullets = [];
+
+// Enemies
+let enemies = [];
+
+// Power-ups
+let powerups = [];
+
+// Wave system
+let waveIndex = 0;
+let waveTimer = 0;
+let waveEnemiesAlive = 0;
+let waves = [];
+let missionComplete = false;
+
+// Boss
+let boss = null;
+
+// Encouragement messages
+const encourageMessages = [
+  'GREAT SHOT!', 'THE FORCE IS WITH YOU!', 'MOST IMPRESSIVE!',
+  'WELL DONE, COMMANDER!', 'EXCELLENT!', 'POWERFUL YOU ARE!',
+  'AMAZING!', 'UNSTOPPABLE!'
+];
+let encourageText = '';
+let encourageTimer = 0;
+
+// ============================================================
+// MISSION DEFINITIONS
+// ============================================================
+function getMissionWaves(mission) {
+  switch (mission) {
+    case 0: // Outer Rim Patrol - X-wings only
+      return [
+        { enemies: [{ type: 'xwing', count: 3 }], delay: 1 },
+        { enemies: [{ type: 'xwing', count: 4 }], delay: 2 },
+        { enemies: [{ type: 'xwing', count: 5 }], delay: 2 },
+      ];
+    case 1: // Asteroid Belt - X-wings + A-wings
+      return [
+        { enemies: [{ type: 'xwing', count: 3 }, { type: 'awing', count: 1 }], delay: 1 },
+        { enemies: [{ type: 'xwing', count: 3 }, { type: 'awing', count: 2 }], delay: 2 },
+        { enemies: [{ type: 'awing', count: 4 }], delay: 2 },
+      ];
+    case 2: // Nebula Battle - + Y-wings
+      return [
+        { enemies: [{ type: 'xwing', count: 3 }, { type: 'awing', count: 1 }], delay: 1 },
+        { enemies: [{ type: 'ywing', count: 2 }, { type: 'xwing', count: 2 }], delay: 2 },
+        { enemies: [{ type: 'awing', count: 3 }, { type: 'ywing', count: 1 }], delay: 2 },
+        { enemies: [{ type: 'ywing', count: 2 }, { type: 'awing', count: 2 }], delay: 2 },
+      ];
+    case 3: // Rebel Fleet - + B-wings
+      return [
+        { enemies: [{ type: 'xwing', count: 3 }, { type: 'bwing', count: 1 }], delay: 1 },
+        { enemies: [{ type: 'awing', count: 2 }, { type: 'bwing', count: 2 }], delay: 2 },
+        { enemies: [{ type: 'ywing', count: 2 }, { type: 'bwing', count: 1 }, { type: 'xwing', count: 2 }], delay: 2 },
+        { enemies: [{ type: 'bwing', count: 3 }, { type: 'awing', count: 2 }], delay: 2 },
+      ];
+    case 4: // Boss - Millennium Falcon
+      return [
+        { enemies: [{ type: 'xwing', count: 2 }], delay: 1 },
+        { boss: true, delay: 2 },
+      ];
+  }
+}
+
+const missionNames = [
+  'OUTER RIM PATROL',
+  'ASTEROID BELT AMBUSH',
+  'BATTLE OF THE NEBULA',
+  'ASSAULT ON REBEL FLEET',
+  'THE MILLENNIUM FALCON',
+];
+
+// ============================================================
+// ENEMY CREATION
+// ============================================================
+function createEnemy(type) {
+  const x = 20 + Math.random() * (W - 60);
+  const base = { x, y: -20, type, shootTimer: 2 + Math.random() * 3, dead: false, hitTimer: 0, time: 0, startX: x };
+
+  switch (type) {
+    case 'xwing':
+      return { ...base, w: 12, h: 12, hp: 1, maxHp: 1, speed: 35, shootRate: 4, sprite: sprXwing, score: 100 };
+    case 'awing':
+      return { ...base, w: 8, h: 10, hp: 1, maxHp: 1, speed: 55, shootRate: 5, sprite: sprAwing, score: 150,
+        amplitude: 30 + Math.random() * 20, frequency: 1.5 + Math.random() };
+    case 'ywing':
+      return { ...base, w: 10, h: 14, hp: 2, maxHp: 2, speed: 25, shootRate: 2.5, sprite: sprYwing, score: 200, dropPowerUp: true };
+    case 'bwing':
+      return { ...base, w: 10, h: 16, hp: 3, maxHp: 3, speed: 35, shootRate: 2, sprite: sprBwing, score: 300,
+        swoopPhase: Math.random() * Math.PI * 2 };
+  }
+}
+
+// ============================================================
+// BOSS CREATION
+// ============================================================
+function createBoss() {
+  boss = {
+    x: W / 2 - 12, y: -30,
+    w: 24, h: 24,
+    hp: 30, maxHp: 30,
+    phase: 1,
+    speed: 30,
+    shootTimer: 0,
+    shootRate: 2,
+    dir: 1,
+    time: 0,
+    entering: true,
+    defeated: false,
+    defeatTimer: 0,
+    hitTimer: 0,
+    escortTimer: 0,
+    frame: 0,
+    frameTimer: 0,
+  };
+}
+
+// ============================================================
+// START MISSION
+// ============================================================
+function startMission(n) {
+  currentMission = n;
+  state = PLAYING;
+  resetPlayer();
+  playerBullets = [];
+  enemyBullets = [];
+  enemies = [];
+  powerups = [];
+  particles = [];
+  boss = null;
+  waveIndex = 0;
+  waveTimer = 0;
+  waveEnemiesAlive = 0;
+  missionComplete = false;
+  waves = getMissionWaves(n);
+  encourageText = '';
+  encourageTimer = 0;
+  gameTime = 0;
+  updateSidebarButtons();
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function update(dt) {
+  gameTime += dt;
+
+  if (state === TITLE) {
+    updateStarfield(dt);
+    updateParticles(dt);
+    return;
+  }
+
+  if (state === LEVEL_COMPLETE || state === VICTORY) {
+    updateStarfield(dt);
+    updateParticles(dt);
+    return;
+  }
+
+  if (state !== PLAYING) return;
+
+  updateStarfield(dt);
+  updatePlayer(dt);
+  updatePlayerBullets(dt);
+  updateEnemyBullets(dt);
+  updateEnemies(dt);
+  updateBoss(dt);
+  updatePowerups(dt);
+  updateParticles(dt);
+  updateWaves(dt);
+  updateEncouragement(dt);
+  checkMissionComplete();
+
+  // Screen shake
+  if (shakeDur > 0) {
+    shakeDur -= dt;
+    if (shakeDur <= 0) shakeAmount = 0;
+  }
+}
+
+function updatePlayer(dt) {
+  // Movement
+  let dx = 0, dy = 0;
+  if (touchActive) {
+    // Move toward touch position
+    const targetX = touchX - player.w / 2;
+    const targetY = touchY - player.h / 2;
+    const diffX = targetX - player.x;
+    const diffY = targetY - player.y;
+    const dist = Math.sqrt(diffX * diffX + diffY * diffY);
+    if (dist > 3) {
+      dx = diffX / dist;
+      dy = diffY / dist;
+    }
+  } else {
+    if (isLeft()) dx = -1;
+    if (isRight()) dx = 1;
+    if (isUp()) dy = -1;
+    if (isDown()) dy = 1;
+    if (dx && dy) { dx *= 0.707; dy *= 0.707; }
+  }
+
+  player.x += dx * player.speed * dt;
+  player.y += dy * player.speed * dt;
+
+  // Clamp to screen
+  player.x = Math.max(0, Math.min(W - player.w, player.x));
+  player.y = Math.max(20, Math.min(H - player.h - 4, player.y));
+
+  // Invincibility timer
+  if (player.invincible > 0) player.invincible -= dt;
+
+  // Animation
+  player.frameTimer += dt;
+  if (player.frameTimer > 0.15) {
+    player.frameTimer = 0;
+    player.frame = 1 - player.frame;
+  }
+
+  // Auto-fire
+  player.shootTimer -= dt;
+  if (player.shootTimer <= 0) {
+    player.shootTimer = player.shootInterval;
+    firePlayerWeapon();
+  }
+}
+
+function firePlayerWeapon() {
+  const cx = player.x + player.w / 2;
+  const topY = player.y;
+
+  sfxPlayerShoot();
+
+  if (player.weaponLevel >= 3) {
+    // Triple shot
+    playerBullets.push({ x: cx - 1, y: topY, w: 2, h: 6, vy: -250, vx: 0, color: '#44ff44', torpedo: false });
+    playerBullets.push({ x: cx - 6, y: topY + 4, w: 2, h: 6, vy: -240, vx: -30, color: '#44ff44', torpedo: false });
+    playerBullets.push({ x: cx + 4, y: topY + 4, w: 2, h: 6, vy: -240, vx: 30, color: '#44ff44', torpedo: false });
+  } else if (player.weaponLevel >= 2) {
+    // Double shot
+    playerBullets.push({ x: cx - 4, y: topY, w: 2, h: 6, vy: -250, vx: 0, color: '#44ff44', torpedo: false });
+    playerBullets.push({ x: cx + 2, y: topY, w: 2, h: 6, vy: -250, vx: 0, color: '#44ff44', torpedo: false });
+  } else {
+    // Single shot
+    playerBullets.push({ x: cx - 1, y: topY, w: 2, h: 6, vy: -250, vx: 0, color: '#44ff44', torpedo: false });
+  }
+
+  // Fire torpedo if available
+  if (player.torpedoes > 0 && player.shootTimer <= 0) {
+    // Fire torpedoes less frequently
+    if (Math.random() < 0.2) {
+      player.torpedoes--;
+      playerBullets.push({ x: cx - 2, y: topY, w: 4, h: 8, vy: -200, vx: 0, color: '#ffcc00', torpedo: true });
+    }
+  }
+}
+
+function updatePlayerBullets(dt) {
+  for (let i = playerBullets.length - 1; i >= 0; i--) {
+    const b = playerBullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    if (b.y < -10 || b.x < -10 || b.x > W + 10) {
+      playerBullets.splice(i, 1);
+      continue;
+    }
+
+    // Check enemy collisions
+    let hit = false;
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      const e = enemies[j];
+      if (e.dead) continue;
+      if (aabb(b, e)) {
+        e.hp--;
+        e.hitTimer = 0.1;
+        if (!b.torpedo) {
+          playerBullets.splice(i, 1);
+        }
+        if (e.hp <= 0) {
+          destroyEnemy(e, j);
+        } else {
+          sfxHit();
+        }
+        hit = true;
+        break;
+      }
+    }
+    if (hit) continue;
+
+    // Check boss collision
+    if (boss && !boss.defeated && !boss.entering) {
+      if (aabb(b, boss)) {
+        boss.hp--;
+        boss.hitTimer = 0.1;
+        if (!b.torpedo) playerBullets.splice(i, 1);
+        sfxBossHit();
+        screenShake(2, 0.1);
+
+        // Phase transitions
+        if (boss.hp <= 0) {
+          boss.defeated = true;
+          boss.defeatTimer = 3;
+          sfxHyperspace();
+        } else if (boss.hp <= 10 && boss.phase < 3) {
+          boss.phase = 3;
+          boss.speed = 60;
+          boss.shootRate = 0.8;
+          showEncouragement('ALMOST THERE!');
+        } else if (boss.hp <= 20 && boss.phase < 2) {
+          boss.phase = 2;
+          boss.speed = 45;
+          boss.shootRate = 1.2;
+          showEncouragement('KEEP FIRING!');
+        }
+      }
+    }
+  }
+}
+
+function updateEnemyBullets(dt) {
+  for (let i = enemyBullets.length - 1; i >= 0; i--) {
+    const b = enemyBullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    if (b.y > H + 10 || b.y < -10 || b.x < -10 || b.x > W + 10) {
+      enemyBullets.splice(i, 1);
+      continue;
+    }
+
+    // Hit player?
+    if (player.invincible <= 0) {
+      const ph = { x: player.x + (player.w - player.hitW) / 2, y: player.y + (player.h - player.hitH) / 2, w: player.hitW, h: player.hitH };
+      if (aabb(b, ph)) {
+        enemyBullets.splice(i, 1);
+        hitPlayer();
+      }
+    }
+  }
+}
+
+function hitPlayer() {
+  player.shields--;
+  player.invincible = 1.5;
+  sfxShieldAbsorb();
+  screenShake(4, 0.2);
+  spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#00cccc', 6, 2);
+
+  if (player.shields <= 0) {
+    // Auto recharge - NO game over!
+    player.shields = 3;
+    player.weaponLevel = Math.max(1, player.weaponLevel - 1);
+    showEncouragement('SHIELDS RECHARGED!');
+    spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#44eeff', 12, 3);
+  }
+}
+
+function updateEnemies(dt) {
+  for (let i = enemies.length - 1; i >= 0; i--) {
+    const e = enemies[i];
+    if (e.dead) {
+      enemies.splice(i, 1);
+      waveEnemiesAlive--;
+      continue;
+    }
+
+    e.time += dt;
+    e.hitTimer = Math.max(0, e.hitTimer - dt);
+
+    // Movement patterns
+    switch (e.type) {
+      case 'xwing':
+        e.y += e.speed * dt;
+        break;
+      case 'awing':
+        e.y += e.speed * dt;
+        e.x = e.startX + Math.sin(e.time * e.frequency) * e.amplitude;
+        break;
+      case 'ywing':
+        e.y += e.speed * dt;
+        break;
+      case 'bwing':
+        e.y += e.speed * dt;
+        e.x = e.startX + Math.sin(e.time * 1.2 + e.swoopPhase) * 40;
+        break;
+    }
+
+    // Clamp X
+    e.x = Math.max(0, Math.min(W - e.w, e.x));
+
+    // Off screen bottom - remove
+    if (e.y > H + 20) {
+      enemies.splice(i, 1);
+      waveEnemiesAlive--;
+      continue;
+    }
+
+    // Shooting
+    e.shootTimer -= dt;
+    if (e.shootTimer <= 0 && e.y > 10 && e.y < H - 40) {
+      e.shootTimer = e.shootRate + Math.random() * 1.5;
+      // Aim somewhat toward player but inaccurate (kid-friendly)
+      const dx = (player.x + player.w / 2) - (e.x + e.w / 2);
+      const dy = (player.y + player.h / 2) - (e.y + e.h);
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const inaccuracy = 0.3;
+      const vx = (dx / dist) * 80 + (Math.random() - 0.5) * 80 * inaccuracy;
+      const vy = (dy / dist) * 80 + 40;
+      enemyBullets.push({ x: e.x + e.w / 2 - 1, y: e.y + e.h, w: 2, h: 4, vx, vy: Math.abs(vy), color: '#ff3333' });
+      sfxEnemyShoot();
+    }
+
+    // Collision with player
+    if (player.invincible <= 0) {
+      const ph = { x: player.x + (player.w - player.hitW) / 2, y: player.y + (player.h - player.hitH) / 2, w: player.hitW, h: player.hitH };
+      if (aabb(e, ph)) {
+        hitPlayer();
+        e.hp -= 2;
+        if (e.hp <= 0) destroyEnemy(e, i);
+      }
+    }
+  }
+}
+
+function destroyEnemy(e, index) {
+  e.dead = true;
+  score += e.score;
+  sfxExplosion();
+  screenShake(3, 0.15);
+
+  // Particles
+  spawnParticles(e.x + e.w / 2, e.y + e.h / 2, '#ff8800', 10, 3);
+  spawnParticles(e.x + e.w / 2, e.y + e.h / 2, '#ffcc00', 6, 2);
+
+  // Random encouragement
+  if (Math.random() < 0.15) {
+    showEncouragement(encourageMessages[Math.floor(Math.random() * encourageMessages.length)]);
+  }
+
+  // Drop power-up?
+  if (e.dropPowerUp || Math.random() < 0.08) {
+    dropPowerUp(e.x + e.w / 2, e.y + e.h / 2);
+  }
+}
+
+function dropPowerUp(x, y) {
+  const types = ['weapon', 'torpedo', 'shield'];
+  const weights = [0.5, 0.3, 0.2];
+  let r = Math.random();
+  let type = 'weapon';
+  for (let i = 0; i < types.length; i++) {
+    r -= weights[i];
+    if (r <= 0) { type = types[i]; break; }
+  }
+  powerups.push({ x: x - 4, y, w: 8, h: 8, type, vy: 30, time: 0 });
+}
+
+function updatePowerups(dt) {
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const p = powerups[i];
+    p.y += p.vy * dt;
+    p.time += dt;
+    if (p.y > H + 10) { powerups.splice(i, 1); continue; }
+
+    // Collect
+    if (aabb(p, player)) {
+      powerups.splice(i, 1);
+      sfxPowerUp();
+      spawnParticles(p.x + 4, p.y + 4, '#44ff44', 8, 2);
+
+      switch (p.type) {
+        case 'weapon':
+          player.weaponLevel = Math.min(3, player.weaponLevel + 1);
+          showEncouragement('WEAPON UPGRADE!');
+          break;
+        case 'torpedo':
+          player.torpedoes += 3;
+          showEncouragement('TORPEDOES!');
+          break;
+        case 'shield':
+          player.shields = Math.min(player.maxShields, player.shields + 1);
+          showEncouragement('SHIELDS UP!');
+          break;
+      }
+    }
+  }
+}
+
+function updateBoss(dt) {
+  if (!boss) return;
+
+  boss.time += dt;
+  boss.hitTimer = Math.max(0, boss.hitTimer - dt);
+  boss.frameTimer = (boss.frameTimer || 0) + dt;
+  if (boss.frameTimer > 0.2) { boss.frameTimer = 0; boss.frame = 1 - boss.frame; }
+
+  if (boss.entering) {
+    boss.y += 30 * dt;
+    if (boss.y >= 20) {
+      boss.entering = false;
+      boss.y = 20;
+      showEncouragement('THE FALCON APPEARS!');
+    }
+    return;
+  }
+
+  if (boss.defeated) {
+    boss.defeatTimer -= dt;
+    // Hyperspace escape animation
+    boss.y -= 150 * dt * (3 - boss.defeatTimer);
+    spawnParticles(boss.x + boss.w / 2, boss.y + boss.h, '#4488ff', 2, 1);
+
+    if (boss.defeatTimer <= 0) {
+      boss = null;
+      state = VICTORY;
+      sfxImperialMarch();
+      spawnConfetti(W / 2, H / 2, 50);
+    }
+    return;
+  }
+
+  // Movement
+  boss.x += boss.dir * boss.speed * dt;
+  if (boss.x <= 10 || boss.x >= W - boss.w - 10) {
+    boss.dir *= -1;
+  }
+  // Slight vertical bobbing
+  boss.y = 20 + Math.sin(boss.time * 0.8) * 10;
+
+  // Shooting
+  boss.shootTimer -= dt;
+  if (boss.shootTimer <= 0) {
+    boss.shootTimer = boss.shootRate;
+    // Multiple shot patterns based on phase
+    const cx = boss.x + boss.w / 2;
+    const by = boss.y + boss.h;
+
+    if (boss.phase >= 3) {
+      // Spread shot
+      for (let a = -2; a <= 2; a++) {
+        enemyBullets.push({ x: cx - 1, y: by, w: 2, h: 4, vx: a * 25, vy: 90, color: '#ff3333' });
+      }
+    } else if (boss.phase >= 2) {
+      // Triple shot
+      enemyBullets.push({ x: cx - 1, y: by, w: 2, h: 4, vx: 0, vy: 90, color: '#ff3333' });
+      enemyBullets.push({ x: cx - 1, y: by, w: 2, h: 4, vx: -30, vy: 80, color: '#ff3333' });
+      enemyBullets.push({ x: cx - 1, y: by, w: 2, h: 4, vx: 30, vy: 80, color: '#ff3333' });
+    } else {
+      // Double shot
+      enemyBullets.push({ x: cx - 4, y: by, w: 2, h: 4, vx: -10, vy: 80, color: '#ff3333' });
+      enemyBullets.push({ x: cx + 2, y: by, w: 2, h: 4, vx: 10, vy: 80, color: '#ff3333' });
+    }
+    sfxEnemyShoot();
+  }
+
+  // Spawn escorts periodically in phase 2+
+  if (boss.phase >= 2) {
+    boss.escortTimer -= dt;
+    if (boss.escortTimer <= 0) {
+      boss.escortTimer = 6;
+      const escort = createEnemy(Math.random() < 0.5 ? 'xwing' : 'awing');
+      enemies.push(escort);
+      waveEnemiesAlive++;
+    }
+  }
+}
+
+function updateWaves(dt) {
+  if (missionComplete) return;
+  if (!waves || waveIndex >= waves.length) return;
+
+  // Wait for delay
+  waveTimer += dt;
+  const currentWave = waves[waveIndex];
+  if (waveTimer < currentWave.delay) return;
+
+  // Check if previous wave enemies are cleared
+  if (waveEnemiesAlive > 0) return;
+
+  // Spawn next wave
+  if (currentWave.boss) {
+    createBoss();
+  } else {
+    for (const group of currentWave.enemies) {
+      for (let i = 0; i < group.count; i++) {
+        const e = createEnemy(group.type);
+        e.y = -20 - i * 30; // stagger entry
+        enemies.push(e);
+        waveEnemiesAlive++;
+      }
+    }
+  }
+
+  if (waveIndex > 0 && !currentWave.boss) {
+    sfxWaveComplete();
+  }
+
+  waveIndex++;
+  waveTimer = 0;
+}
+
+function checkMissionComplete() {
+  if (missionComplete) return;
+  if (waveIndex < waves.length) return;
+  if (enemies.length > 0 || waveEnemiesAlive > 0 || boss) return;
+
+  missionComplete = true;
+
+  if (currentMission < 4) {
+    state = LEVEL_COMPLETE;
+    sfxWaveComplete();
+    spawnConfetti(W / 2, H / 3, 30);
+  }
+}
+
+function showEncouragement(msg) {
+  encourageText = msg;
+  encourageTimer = 2;
+}
+
+function updateEncouragement(dt) {
+  if (encourageTimer > 0) encourageTimer -= dt;
+}
+
+// ============================================================
+// COLLISION
+// ============================================================
+function aabb(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ============================================================
+// DRAW
+// ============================================================
+function draw() {
+  // Screen shake offset
+  let sx = 0, sy = 0;
+  if (shakeDur > 0) {
+    sx = (Math.random() - 0.5) * shakeAmount * 2;
+    sy = (Math.random() - 0.5) * shakeAmount * 2;
+  }
+
+  ctx.save();
+  ctx.translate(sx, sy);
+
+  // Background
+  ctx.fillStyle = '#05050f';
+  ctx.fillRect(-5, -5, W + 10, H + 10);
+
+  drawStarfield();
+  drawMissionBackground();
+
+  if (state === TITLE) {
+    drawTitleScreen();
+  } else if (state === PLAYING) {
+    drawGame();
+  } else if (state === LEVEL_COMPLETE) {
+    drawGame();
+    drawLevelComplete();
+  } else if (state === VICTORY) {
+    drawGame();
+    drawVictory();
+  }
+
+  ctx.restore();
+}
+
+function drawMissionBackground() {
+  if (state !== PLAYING && state !== LEVEL_COMPLETE) return;
+
+  // Mission-specific ambient elements
+  switch (currentMission) {
+    case 1: // Asteroids
+      ctx.fillStyle = '#333';
+      ctx.globalAlpha = 0.3;
+      for (let i = 0; i < 5; i++) {
+        const ax = (i * 97 + gameTime * 10) % (W + 40) - 20;
+        const ay = (i * 53 + gameTime * (8 + i * 3)) % (H + 40) - 20;
+        ctx.beginPath();
+        ctx.arc(ax, ay, 6 + i * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    case 2: // Nebula
+      ctx.globalAlpha = 0.08;
+      const nebGrad = ctx.createRadialGradient(W / 2, H / 2, 20, W / 2, H / 2, 200);
+      nebGrad.addColorStop(0, '#cc44ff');
+      nebGrad.addColorStop(0.5, '#4444ff');
+      nebGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = nebGrad;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+      break;
+    case 3: // Rebel fleet - distant cruiser silhouette
+      ctx.fillStyle = '#111122';
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(W * 0.6, 10, 80, 8);
+      ctx.fillRect(W * 0.65, 6, 40, 4);
+      ctx.fillRect(W * 0.7, 14, 30, 6);
+      ctx.globalAlpha = 1;
+      break;
+    case 4: // Death Star in background
+      ctx.globalAlpha = 0.1;
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(W * 0.8, H * 0.3, 50, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#444';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(W * 0.8 - 50, H * 0.3);
+      ctx.lineTo(W * 0.8 + 50, H * 0.3);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      break;
+  }
+}
+
+function drawGame() {
+  // Power-ups
+  for (const p of powerups) {
+    const bob = Math.sin(p.time * 4) * 2;
+    let spr;
+    switch (p.type) {
+      case 'weapon': spr = sprPowerWeapon; break;
+      case 'torpedo': spr = sprPowerTorpedo; break;
+      case 'shield': spr = sprPowerShield; break;
+    }
+    drawSprite(spr, p.x, p.y + bob);
+  }
+
+  // Enemy bullets
+  for (const b of enemyBullets) {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(Math.floor(b.x), Math.floor(b.y), b.w, b.h);
+    // Glow
+    ctx.globalAlpha = 0.3;
+    ctx.fillRect(Math.floor(b.x) - 1, Math.floor(b.y) - 1, b.w + 2, b.h + 2);
+    ctx.globalAlpha = 1;
+  }
+
+  // Player bullets
+  for (const b of playerBullets) {
+    ctx.fillStyle = b.color;
+    ctx.fillRect(Math.floor(b.x), Math.floor(b.y), b.w, b.h);
+    ctx.globalAlpha = 0.3;
+    ctx.fillRect(Math.floor(b.x) - 1, Math.floor(b.y) - 1, b.w + 2, b.h + 2);
+    ctx.globalAlpha = 1;
+  }
+
+  // Enemies
+  for (const e of enemies) {
+    if (e.dead) continue;
+    if (e.hitTimer > 0) {
+      ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.05) * 0.5;
+    }
+    drawSprite(e.sprite, e.x, e.y);
+    ctx.globalAlpha = 1;
+  }
+
+  // Boss
+  if (boss) {
+    if (boss.hitTimer > 0) {
+      ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.05) * 0.5;
+    }
+    const spr = boss.frame === 0 ? sprFalcon1 : sprFalcon2;
+    drawSprite(spr, boss.x, boss.y);
+    ctx.globalAlpha = 1;
+  }
+
+  // Player
+  if (player.invincible <= 0 || Math.floor(player.invincible * 10) % 2 === 0) {
+    const spr = player.frame === 0 ? sprExecutor1 : sprExecutor2;
+    drawSprite(spr, player.x, player.y);
+  }
+
+  // Particles
+  drawParticles();
+
+  // HUD
+  drawHUD();
+
+  // Encouragement
+  if (encourageTimer > 0) {
+    ctx.globalAlpha = Math.min(1, encourageTimer);
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(encourageText, W / 2, H / 2 - 20);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHUD() {
+  // Shields (top-left)
+  for (let i = 0; i < player.maxShields; i++) {
+    if (i < player.shields) {
+      drawSprite(sprShieldIcon, 4 + i * 9, 4);
+    } else {
+      ctx.globalAlpha = 0.2;
+      drawSprite(sprShieldIcon, 4 + i * 9, 4);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Weapon level
+  ctx.fillStyle = '#44ff44';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('W:' + player.weaponLevel, 4, 20);
+
+  // Torpedoes
+  if (player.torpedoes > 0) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText('T:' + player.torpedoes, 35, 20);
+  }
+
+  // Score (top-center)
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SCORE: ' + score, W / 2, 12);
+
+  // Mission name (top-right)
+  ctx.fillStyle = '#ff3333';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(missionNames[currentMission], W - 4, 12);
+
+  // Wave indicator
+  if (waves && waveIndex <= waves.length && !boss) {
+    ctx.fillStyle = '#888';
+    ctx.font = '7px monospace';
+    ctx.fillText('WAVE ' + Math.min(waveIndex, waves.length) + '/' + waves.length, W - 4, 22);
+  }
+
+  // Boss HP bar
+  if (boss && !boss.entering && !boss.defeated) {
+    const barW = 120;
+    const barH = 6;
+    const barX = W / 2 - barW / 2;
+    const barY = 22;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(barX, barY, barW, barH);
+    const hpRatio = boss.hp / boss.maxHp;
+    ctx.fillStyle = hpRatio > 0.5 ? '#44ff44' : (hpRatio > 0.25 ? '#ffcc00' : '#ff3333');
+    ctx.fillRect(barX, barY, barW * hpRatio, barH);
+    ctx.strokeStyle = '#666';
+    ctx.strokeRect(barX, barY, barW, barH);
+    ctx.fillStyle = '#fff';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('MILLENNIUM FALCON', W / 2, barY - 2);
+  }
+}
+
+function drawTitleScreen() {
+  // Darken background
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Title
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('STAR WARS', W / 2, 60);
+
+  ctx.fillStyle = '#ff3333';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('EXECUTOR COMMAND', W / 2, 85);
+
+  // Subtitle
+  ctx.fillStyle = '#aaa';
+  ctx.font = '10px monospace';
+  ctx.fillText('A Space Adventure for Commander Bobo', W / 2, 110);
+
+  // Draw Executor sprite in center
+  drawSprite(Math.floor(Date.now() / 300) % 2 === 0 ? sprExecutor1 : sprExecutor2, W / 2 - 10, 125);
+
+  // Instructions
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px monospace';
+  const blink = Math.floor(Date.now() / 500) % 2;
+  if (blink) {
+    ctx.fillText('PRESS SPACE OR TAP TO START', W / 2, 200);
+  }
+
+  ctx.fillStyle = '#888';
+  ctx.font = '8px monospace';
+  ctx.fillText('ARROW KEYS / WASD TO MOVE', W / 2, 220);
+  ctx.fillText('AUTO-FIRE ENABLED', W / 2, 232);
+
+  // Mission info
+  ctx.fillStyle = '#ff3333';
+  ctx.font = '9px monospace';
+  ctx.fillText('MISSION ' + (currentMission + 1) + ': ' + missionNames[currentMission], W / 2, 255);
+}
+
+function drawLevelComplete() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('MISSION COMPLETE!', W / 2, 80);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px monospace';
+  ctx.fillText(missionNames[currentMission], W / 2, 110);
+
+  ctx.fillStyle = '#44ff44';
+  ctx.font = '10px monospace';
+  ctx.fillText('SCORE: ' + score, W / 2, 140);
+
+  const msgs = ['MOST IMPRESSIVE, COMMANDER!', 'THE EMPIRE IS PROUD!', 'WELL DONE, BOBO!'];
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = '10px monospace';
+  ctx.fillText(msgs[currentMission % msgs.length], W / 2, 170);
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '9px monospace';
+  const blink = Math.floor(Date.now() / 500) % 2;
+  if (blink) {
+    ctx.fillText('PRESS SPACE OR TAP FOR NEXT MISSION', W / 2, 210);
+  }
+}
+
+function drawVictory() {
+  ctx.fillStyle = 'rgba(0,0,0,0.75)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('VICTORY!', W / 2, 55);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px monospace';
+  ctx.fillText('THE FALCON ESCAPES TO HYPERSPACE!', W / 2, 85);
+  ctx.fillText('YOU WON THE BATTLE, COMMANDER!', W / 2, 105);
+
+  // Draw Executor
+  drawSprite(Math.floor(Date.now() / 300) % 2 === 0 ? sprExecutor1 : sprExecutor2, W / 2 - 10, 120);
+
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('FINAL SCORE: ' + score, W / 2, 175);
+
+  ctx.fillStyle = '#44ff44';
+  ctx.font = '10px monospace';
+  ctx.fillText('THE FORCE IS STRONG WITH YOU, BOBO!', W / 2, 200);
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '9px monospace';
+  const blink = Math.floor(Date.now() / 500) % 2;
+  if (blink) {
+    ctx.fillText('PRESS SPACE OR TAP TO CONTINUE', W / 2, 240);
+  }
+
+  // Confetti
+  if (Math.random() < 0.1) {
+    spawnConfetti(Math.random() * W, 0, 3);
+  }
+}
+
+// ============================================================
+// SIDEBAR
+// ============================================================
+const levelBtns = document.querySelectorAll('.level-btn');
+levelBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const n = parseInt(btn.dataset.level);
+    currentMission = n;
+    score = 0;
+    startMission(n);
+  });
+});
+
+function updateSidebarButtons() {
+  levelBtns.forEach(btn => {
+    const n = parseInt(btn.dataset.level);
+    btn.classList.toggle('active', n === currentMission);
+  });
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+let lastTime = 0;
+
+function gameLoop(time) {
+  const dt = Math.min(0.05, (time - lastTime) / 1000);
+  lastTime = time;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
