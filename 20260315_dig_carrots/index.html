@@ -1,0 +1,1377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Dig Carrots! - Word Game for Bobo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #4a90d9;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+canvas {
+  display: block;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const CONFIG = {
+  W: 960,
+  H: 540,
+  WORDS: [
+    'VOLCANO','ROCK','MAGMA','LAVA','SLEEP','ERUPTION','HAND','JUMP',
+    'KING','LAKE','MAKE','NAME','OPEN','PLAY','RAIN','SAND',
+    'TAKE','UPON','VERY','WALK','BACK','COLD','DOOR','FAST',
+    'GIRL','HELP','INTO','JUST','KEEP','LONG','MUCH','NEXT',
+    'OVER','PICK','RIDE','SHIP','THEM','UNDER','WATER','PLANT',
+    'ABOVE','BEGAN','BRING','CARRY','CLEAN','CLIMB','DRINK','EARTH',
+    'EIGHT','FLOAT','GREEN','HAPPY','HOUSE','LEARN','LIGHT','MIGHT',
+    'NORTH','ROUND','STORY','THINK'
+  ],
+  ROUNDS: 16,
+  CARROTS_PER_ROUND: 4,
+  ROUND_TIME: 10,
+  RESULT_PAUSE: 2,
+  VOWELS: 'AEIOU',
+  ALL_LETTERS: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  MASKS_PER_WORD: 2
+};
+
+// ============================================================
+// CANVAS SETUP
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = CONFIG.W;
+canvas.height = CONFIG.H;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  scale = Math.min(ww / CONFIG.W, wh / CONFIG.H);
+  canvas.style.width = (CONFIG.W * scale) + 'px';
+  canvas.style.height = (CONFIG.H * scale) + 'px';
+  offsetX = (ww - CONFIG.W * scale) / 2;
+  offsetY = (wh - CONFIG.H * scale) / 2;
+  canvas.style.position = 'absolute';
+  canvas.style.left = offsetX + 'px';
+  canvas.style.top = offsetY + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// AUDIO SYSTEM
+// ============================================================
+let audioCtx;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playTone(freq, dur, type = 'sine', vol = 0.1, slide = 0) {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audioCtx.currentTime + dur);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + dur);
+}
+
+function sfxCorrect() {
+  [523, 659, 784].forEach((f, i) => setTimeout(() => playTone(f, 0.2, 'sine', 0.12), i * 100));
+}
+function sfxWrong() {
+  playTone(233, 0.2, 'triangle', 0.1);
+  setTimeout(() => playTone(175, 0.3, 'triangle', 0.1), 100);
+}
+function sfxTimeout() {
+  [300, 250, 180, 120].forEach((f, i) => setTimeout(() => playTone(f, 0.25, 'triangle', 0.08), i * 80));
+}
+function sfxDig() {
+  playTone(150, 0.2, 'triangle', 0.1, -50);
+}
+function sfxPull() {
+  playTone(300, 0.3, 'sine', 0.08, 400);
+}
+function sfxTick() {
+  playTone(800, 0.05, 'sine', 0.06);
+}
+function sfxGameOver() {
+  [392, 494, 587, 784, 587, 784, 1047].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.25, 'sine', 0.1), i * 120));
+}
+function sfxStart() {
+  [523, 659, 784, 1047].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.15, 'sine', 0.1), i * 80));
+}
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const STATE = { TITLE: 0, PLAYING: 1, ROUND_RESULT: 2, GAME_OVER: 3 };
+let state = STATE.TITLE;
+let score = 0;
+let round = 0;
+let roundTimer = 0;
+let resultTimer = 0;
+let wordOrder = [];
+let currentWord = '';
+let maskedIndices = [];
+let revealedLetters = [];  // filled all at once on correct click
+let correctLetters = '';   // string of all masked letters, e.g. "AE"
+let answered = false;      // whether the round has been answered
+let carrots = [];
+let particles = [];
+let hoveredCarrot = -1;
+let lastTickAt = -1;
+let roundResult = '';
+
+// Dig animation state
+let digAnim = null;
+
+// Celebration ribbons for game over
+let ribbons = [];
+const RIBBON_COLORS = ['#FF6B6B','#FFD93D','#4ECDC4','#FF8C42','#A78BFA','#34D399','#F472B6','#60A5FA'];
+
+function spawnRibbons() {
+  ribbons = [];
+  for (let i = 0; i < 40; i++) {
+    ribbons.push({
+      x: Math.random() * CONFIG.W,
+      y: -20 - Math.random() * 300,
+      vx: (Math.random() - 0.5) * 60,
+      vy: 40 + Math.random() * 80,
+      w: 6 + Math.random() * 8,
+      h: 14 + Math.random() * 16,
+      rot: Math.random() * Math.PI * 2,
+      rotV: (Math.random() - 0.5) * 4,
+      color: RIBBON_COLORS[Math.floor(Math.random() * RIBBON_COLORS.length)],
+      wobble: Math.random() * Math.PI * 2,
+      wobbleSpeed: 1.5 + Math.random() * 2
+    });
+  }
+}
+
+function updateRibbons(dt) {
+  ribbons.forEach(r => {
+    r.wobble += r.wobbleSpeed * dt;
+    r.x += (r.vx + Math.sin(r.wobble) * 30) * dt;
+    r.y += r.vy * dt;
+    r.rot += r.rotV * dt;
+    // Loop back to top when off screen
+    if (r.y > CONFIG.H + 30) {
+      r.y = -20 - Math.random() * 40;
+      r.x = Math.random() * CONFIG.W;
+    }
+  });
+}
+
+function drawRibbons() {
+  ribbons.forEach(r => {
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    ctx.rotate(r.rot);
+    // Ribbon body (curved rectangle)
+    ctx.fillStyle = r.color;
+    ctx.beginPath();
+    ctx.moveTo(-r.w / 2, -r.h / 2);
+    ctx.quadraticCurveTo(r.w * 0.3, -r.h * 0.1, r.w / 2, -r.h / 2);
+    ctx.lineTo(r.w / 2, r.h / 2);
+    ctx.quadraticCurveTo(-r.w * 0.3, r.h * 0.1, -r.w / 2, r.h / 2);
+    ctx.closePath();
+    ctx.fill();
+    // Shine
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillRect(-r.w / 4, -r.h / 2, r.w / 4, r.h);
+    ctx.restore();
+  });
+}
+
+// Pre-rendered background
+let bgCanvas, bgCtx;
+
+// Cloud positions
+const clouds = [];
+for (let i = 0; i < 5; i++) {
+  clouds.push({ x: Math.random() * CONFIG.W, y: 100 + Math.random() * 120, w: 80 + Math.random() * 60 });
+}
+
+// Shovel position constants
+const SHOVEL_REST_X = CONFIG.W / 2;
+const SHOVEL_REST_Y = 115;
+
+// ============================================================
+// DRAWING UTILITIES
+// ============================================================
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawCloud(cx, cy, w) {
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  const h = w * 0.4;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, w * 0.5, h * 0.4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx - w * 0.25, cy + h * 0.1, w * 0.3, h * 0.35, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx + w * 0.25, cy + h * 0.05, w * 0.35, h * 0.3, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawSun(x, y, r) {
+  const grd = ctx.createRadialGradient(x, y, r * 0.5, x, y, r * 2);
+  grd.addColorStop(0, 'rgba(255,255,100,0.4)');
+  grd.addColorStop(1, 'rgba(255,255,100,0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(x - r * 2, y - r * 2, r * 4, r * 4);
+  ctx.fillStyle = '#FFD93D';
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(x - r * 0.25, y - r * 0.1, r * 0.08, 0, Math.PI * 2);
+  ctx.arc(x + r * 0.25, y - r * 0.1, r * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y + r * 0.1, r * 0.2, 0, Math.PI);
+  ctx.stroke();
+}
+
+// ============================================================
+// BACKGROUND (pre-rendered)
+// ============================================================
+function renderBackground() {
+  bgCanvas = document.createElement('canvas');
+  bgCanvas.width = CONFIG.W;
+  bgCanvas.height = CONFIG.H;
+  bgCtx = bgCanvas.getContext('2d');
+
+  const c = bgCtx;
+  const skyGrd = c.createLinearGradient(0, 0, 0, 320);
+  skyGrd.addColorStop(0, '#5BA3E6');
+  skyGrd.addColorStop(1, '#87CEEB');
+  c.fillStyle = skyGrd;
+  c.fillRect(0, 0, CONFIG.W, 320);
+
+  const dirtGrd = c.createLinearGradient(0, 300, 0, CONFIG.H);
+  dirtGrd.addColorStop(0, '#A0724A');
+  dirtGrd.addColorStop(1, '#6B3F23');
+  c.fillStyle = dirtGrd;
+  c.fillRect(0, 300, CONFIG.W, CONFIG.H - 300);
+
+  c.fillStyle = '#4CAF50';
+  c.fillRect(0, 295, CONFIG.W, 12);
+  c.fillStyle = '#66BB6A';
+  for (let x = 0; x < CONFIG.W; x += 15) {
+    c.beginPath();
+    c.moveTo(x, 295);
+    c.lineTo(x + 7, 282 - Math.random() * 8);
+    c.lineTo(x + 14, 295);
+    c.fill();
+  }
+  c.fillStyle = '#388E3C';
+  for (let x = 7; x < CONFIG.W; x += 15) {
+    c.beginPath();
+    c.moveTo(x, 295);
+    c.lineTo(x + 5, 286 - Math.random() * 6);
+    c.lineTo(x + 10, 295);
+    c.fill();
+  }
+
+  c.fillStyle = 'rgba(0,0,0,0.06)';
+  for (let i = 0; i < 40; i++) {
+    const dx = Math.random() * CONFIG.W;
+    const dy = 320 + Math.random() * (CONFIG.H - 340);
+    const dr = 3 + Math.random() * 8;
+    c.beginPath();
+    c.arc(dx, dy, dr, 0, Math.PI * 2);
+    c.fill();
+  }
+}
+
+// ============================================================
+// SHOVEL DRAWING
+// ============================================================
+function drawShovelBlade(cx, cy, bladeW, bladeH, angle) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (angle) ctx.rotate(angle);
+
+  const topW = bladeW / 2;
+  const botW = bladeW / 2 - 8;
+
+  // Handle (wooden stick going up)
+  ctx.strokeStyle = '#8B6914';
+  ctx.lineWidth = 11;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, -bladeH / 2);
+  ctx.lineTo(0, -bladeH / 2 - 90);
+  ctx.stroke();
+  // Wood highlight
+  ctx.strokeStyle = '#A0802A';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(3, -bladeH / 2 - 5);
+  ctx.lineTo(3, -bladeH / 2 - 85);
+  ctx.stroke();
+  // Handle grip (T-shape)
+  ctx.strokeStyle = '#5A3A0A';
+  ctx.lineWidth = 10;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-18, -bladeH / 2 - 88);
+  ctx.lineTo(18, -bladeH / 2 - 88);
+  ctx.stroke();
+
+  // Shaft collar (metal ring)
+  ctx.fillStyle = '#999';
+  ctx.strokeStyle = '#777';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  roundRect(-14, -bladeH / 2 - 5, 28, 10, 3);
+  ctx.fillStyle = '#999';
+  ctx.fill();
+  ctx.strokeStyle = '#777';
+  ctx.stroke();
+
+  // Blade shape
+  ctx.beginPath();
+  ctx.moveTo(-topW, -bladeH / 2);
+  ctx.lineTo(topW, -bladeH / 2);
+  ctx.lineTo(botW, bladeH / 2 - 12);
+  ctx.quadraticCurveTo(botW, bladeH / 2, botW - 12, bladeH / 2);
+  ctx.lineTo(-botW + 12, bladeH / 2);
+  ctx.quadraticCurveTo(-botW, bladeH / 2, -botW, bladeH / 2 - 12);
+  ctx.lineTo(-topW, -bladeH / 2);
+  ctx.closePath();
+
+  // Metal gradient
+  const bladeGrd = ctx.createLinearGradient(0, -bladeH / 2, 0, bladeH / 2);
+  bladeGrd.addColorStop(0, '#C8C8C8');
+  bladeGrd.addColorStop(0.3, '#E0E0E0');
+  bladeGrd.addColorStop(0.6, '#B0B0B0');
+  bladeGrd.addColorStop(1, '#909090');
+  ctx.fillStyle = bladeGrd;
+  ctx.fill();
+  ctx.strokeStyle = '#777';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  // Dirt smudges
+  ctx.fillStyle = 'rgba(139, 90, 43, 0.12)';
+  ctx.beginPath();
+  ctx.ellipse(-15, bladeH * 0.15, 25, 10, 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(20, bladeH * 0.25, 15, 8, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Center ridge line
+  ctx.strokeStyle = 'rgba(150,150,150,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, -bladeH / 2 + 5);
+  ctx.lineTo(0, bladeH / 2 - 10);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawShovelWithWord(cx, cy, word, masked, revealed, isAnswered, time) {
+  const font = '"Chalkboard SE", "Comic Sans MS", cursive';
+  const wordLen = word.length;
+  const bladeW = Math.max(220, wordLen * 46 + 40);
+  const bladeH = 65;
+
+  // Draw the shovel blade
+  drawShovelBlade(cx, cy, bladeW, bladeH, 0);
+
+  // Draw letters inside the blade
+  const charWidth = 40;
+  const totalW = wordLen * charWidth;
+  const startX = cx - totalW / 2 + charWidth / 2;
+  const letterY = cy + 2;
+  const chars = word.split('');
+
+  for (let i = 0; i < chars.length; i++) {
+    const x = startX + i * charWidth;
+    const blankPos = masked.indexOf(i);
+    const isMasked = blankPos !== -1;
+
+    ctx.font = `bold 36px ${font}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (isMasked && isAnswered) {
+      // Revealed after answer
+      ctx.fillStyle = roundResult === 'correct' ? '#2E7D32' : '#CC3333';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.strokeText(revealed[blankPos], x, letterY);
+      ctx.fillText(revealed[blankPos], x, letterY);
+    } else if (isMasked) {
+      // Bouncing question mark for unfilled blank
+      const bounce = Math.sin(time * 6 + blankPos * 1.5) * 3;
+      ctx.fillStyle = '#FFD93D';
+      ctx.strokeStyle = '#8B6914';
+      ctx.lineWidth = 3;
+      ctx.strokeText('?', x, letterY + bounce);
+      ctx.fillText('?', x, letterY + bounce);
+    } else {
+      // Normal letter
+      ctx.fillStyle = '#444';
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 2;
+      ctx.strokeText(chars[i], x, letterY);
+      ctx.fillText(chars[i], x, letterY);
+    }
+  }
+
+  // Hint text
+  if (state === STATE.PLAYING && !isAnswered && !digAnim) {
+    ctx.font = `16px ${font}`;
+    ctx.fillStyle = '#FFD93D';
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 3;
+    ctx.textAlign = 'center';
+    ctx.strokeText('Pick the right carrot!', cx, cy + bladeH / 2 + 18);
+    ctx.fillText('Pick the right carrot!', cx, cy + bladeH / 2 + 18);
+  }
+}
+
+// Small action shovel for dig animation
+function drawActionShovel(cx, cy, angle, letter, showLetter) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+
+  const bw = 55, bh = 40;
+
+  // Handle
+  ctx.strokeStyle = '#8B6914';
+  ctx.lineWidth = 9;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, -bh / 2);
+  ctx.lineTo(0, -bh / 2 - 70);
+  ctx.stroke();
+  ctx.strokeStyle = '#A0802A';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(2, -bh / 2 - 5);
+  ctx.lineTo(2, -bh / 2 - 65);
+  ctx.stroke();
+
+  // Collar
+  ctx.fillStyle = '#999';
+  ctx.beginPath();
+  roundRect(-10, -bh / 2 - 4, 20, 8, 2);
+  ctx.fillStyle = '#999';
+  ctx.fill();
+
+  // Blade
+  const topW = bw / 2;
+  const botW = bw / 2 - 6;
+  ctx.beginPath();
+  ctx.moveTo(-topW, -bh / 2);
+  ctx.lineTo(topW, -bh / 2);
+  ctx.lineTo(botW, bh / 2 - 8);
+  ctx.quadraticCurveTo(botW, bh / 2, botW - 10, bh / 2);
+  ctx.lineTo(-botW + 10, bh / 2);
+  ctx.quadraticCurveTo(-botW, bh / 2, -botW, bh / 2 - 8);
+  ctx.closePath();
+
+  const grd = ctx.createLinearGradient(0, -bh / 2, 0, bh / 2);
+  grd.addColorStop(0, '#C0C0C0');
+  grd.addColorStop(0.5, '#D8D8D8');
+  grd.addColorStop(1, '#909090');
+  ctx.fillStyle = grd;
+  ctx.fill();
+  ctx.strokeStyle = '#777';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Show letters on blade during fly_up
+  if (showLetter && letter) {
+    const fs = letter.length > 4 ? 11 : letter.length > 3 ? 14 : letter.length > 1 ? 18 : 26;
+    ctx.font = `bold ${fs}px "Chalkboard SE", "Comic Sans MS", cursive`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#FF8C42';
+    ctx.strokeStyle = '#CC6020';
+    ctx.lineWidth = 3;
+    ctx.strokeText(letter, 0, 5);
+    ctx.fillText(letter, 0, 5);
+  }
+
+  ctx.restore();
+}
+
+// ============================================================
+// CARROT DRAWING
+// ============================================================
+function drawCarrot(carrot, time) {
+  const { x, y, letters, state: cState, animTime, hovered } = carrot;
+  if (cState === 'hidden' || cState === 'scooped') return;
+
+  const cx = x;
+  let cy = y;
+  let scaleF = 1;
+  let shakeX = 0;
+  let alpha = 1;
+
+  if (cState === 'pulling') {
+    const t = Math.min(animTime / 0.5, 1);
+    cy = y - t * 120;
+    alpha = 1 - t * 0.5;
+    scaleF = 1 + t * 0.2;
+  } else if (cState === 'shaking') {
+    const t = animTime;
+    shakeX = Math.sin(t * 40) * 8 * Math.max(0, 1 - t / 0.5);
+  }
+
+  if (hovered && cState === 'idle') {
+    scaleF = 1.1;
+  }
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx + shakeX, cy);
+  ctx.scale(scaleF, scaleF);
+
+  const isRotten = cState === 'rotting';
+  const bodyColor = isRotten ? '#8B6914' : '#FF8C42';
+  const bodyHighlight = isRotten ? '#7A5B10' : '#FFA559';
+  const leafColor = isRotten ? '#6B7B3A' : '#4CAF50';
+  const leafHighlight = isRotten ? '#5A6A30' : '#66BB6A';
+
+  drawLeaves(0, -35, leafColor, leafHighlight, isRotten);
+
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(-22, -20);
+  ctx.bezierCurveTo(-24, 10, -15, 50, -3, 75);
+  ctx.bezierCurveTo(0, 80, 0, 80, 3, 75);
+  ctx.bezierCurveTo(15, 50, 24, 10, 22, -20);
+  ctx.closePath();
+
+  const bodyGrd = ctx.createLinearGradient(-22, -20, 22, -20);
+  bodyGrd.addColorStop(0, bodyColor);
+  bodyGrd.addColorStop(0.4, bodyHighlight);
+  bodyGrd.addColorStop(1, bodyColor);
+  ctx.fillStyle = bodyGrd;
+  ctx.fill();
+  ctx.strokeStyle = isRotten ? '#5A4010' : '#E07830';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Lines
+  ctx.strokeStyle = isRotten ? 'rgba(80,60,10,0.3)' : 'rgba(200,100,30,0.3)';
+  ctx.lineWidth = 1.5;
+  for (let ly = 0; ly < 50; ly += 15) {
+    const w = 18 - ly * 0.25;
+    ctx.beginPath();
+    ctx.moveTo(-w, ly);
+    ctx.lineTo(w, ly);
+    ctx.stroke();
+  }
+
+  // Face
+  if (isRotten) {
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2.5;
+    [-8, 8].forEach(ex => {
+      ctx.beginPath();
+      ctx.moveTo(ex - 4, 2); ctx.lineTo(ex + 4, 10);
+      ctx.moveTo(ex + 4, 2); ctx.lineTo(ex - 4, 10);
+      ctx.stroke();
+    });
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 25, 6, Math.PI, 0);
+    ctx.stroke();
+  } else if (cState === 'shaking') {
+    ctx.fillStyle = '#333';
+    ctx.beginPath();
+    ctx.ellipse(-8, 6, 4, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(8, 6, 4, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, 22, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#333';
+    ctx.fill();
+  } else {
+    ctx.fillStyle = '#333';
+    ctx.beginPath();
+    ctx.arc(-8, 6, 3.5, 0, Math.PI * 2);
+    ctx.arc(8, 6, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(-6.5, 4.5, 1.5, 0, Math.PI * 2);
+    ctx.arc(9.5, 4.5, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 18, 7, 0.1, Math.PI - 0.1);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,120,80,0.3)';
+    ctx.beginPath();
+    ctx.ellipse(-14, 16, 5, 3, 0, 0, Math.PI * 2);
+    ctx.ellipse(14, 16, 5, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Letters (horizontal, with ".." for gaps)
+  const label = carrot.displayLetters || letters || '';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = isRotten ? '#5A4010' : '#CC6020';
+  ctx.lineWidth = 3;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const fontSize = label.length > 4 ? 15 : label.length > 3 ? 18 : label.length > 1 ? 22 : 28;
+  ctx.font = `bold ${fontSize}px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.strokeText(label, 0, 45);
+  ctx.fillText(label, 0, 45);
+
+  ctx.restore();
+}
+
+function drawLeaves(x, y, color, highlight, wilted) {
+  const droop = wilted ? 0.3 : 0;
+  ctx.fillStyle = highlight;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.bezierCurveTo(x - 4, y - 20 + droop * 20, x + 4, y - 25 + droop * 15, x, y - 30 + droop * 25);
+  ctx.bezierCurveTo(x + 4, y - 25 + droop * 15, x + 4, y - 20 + droop * 20, x, y);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.bezierCurveTo(x - 15, y - 10 + droop * 15, x - 20, y - 20 + droop * 20, x - 12, y - 28 + droop * 25);
+  ctx.bezierCurveTo(x - 8, y - 18 + droop * 15, x - 5, y - 10, x, y);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.bezierCurveTo(x + 15, y - 10 + droop * 15, x + 20, y - 20 + droop * 20, x + 12, y - 28 + droop * 25);
+  ctx.bezierCurveTo(x + 8, y - 18 + droop * 15, x + 5, y - 10, x, y);
+  ctx.fill();
+}
+
+// ============================================================
+// UI DRAWING
+// ============================================================
+function drawHUD() {
+  const font = '"Chalkboard SE", "Comic Sans MS", cursive';
+
+  // Score (top-left)
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 4;
+  ctx.font = `bold 26px ${font}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.strokeText(`Score: ${score}/${CONFIG.ROUNDS}`, 20, 15);
+  ctx.fillText(`Score: ${score}/${CONFIG.ROUNDS}`, 20, 15);
+
+  ctx.font = `17px ${font}`;
+  ctx.strokeText(`Round ${round}/${CONFIG.ROUNDS}`, 20, 44);
+  ctx.fillText(`Round ${round}/${CONFIG.ROUNDS}`, 20, 44);
+
+  // Timer (top-right)
+  drawTimer();
+
+  // Shovel with word (center) — only show static shovel when not animating
+  if (!digAnim) {
+    drawShovelWithWord(SHOVEL_REST_X, SHOVEL_REST_Y, currentWord, maskedIndices,
+      revealedLetters, answered, totalTime);
+  } else {
+    // Show a dimmed/ghost shovel outline while digging
+    ctx.globalAlpha = 0.3;
+    drawShovelWithWord(SHOVEL_REST_X, SHOVEL_REST_Y, currentWord, maskedIndices,
+      revealedLetters, answered, totalTime);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawTimer() {
+  const cx = CONFIG.W - 50, cy = 40, r = 26;
+  const frac = Math.max(0, roundTimer / CONFIG.ROUND_TIME);
+  const urgent = roundTimer <= 3;
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - 3, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+  ctx.strokeStyle = urgent ? '#FF4444' : '#fff';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  ctx.fillStyle = urgent ? '#FF4444' : '#fff';
+  ctx.font = `bold 20px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(Math.ceil(roundTimer), cx, cy + 1);
+}
+
+function drawTitleScreen(time) {
+  ctx.drawImage(bgCanvas, 0, 0);
+  drawSun(120, 100, 40);
+  clouds.forEach(c => drawCloud(c.x, c.y, c.w));
+
+  const font = '"Chalkboard SE", "Comic Sans MS", cursive';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Decorative shovel behind title (angled)
+  ctx.save();
+  ctx.translate(CONFIG.W / 2 + 180, 150);
+  ctx.rotate(0.3);
+  drawShovelBlade(0, 0, 100, 50, 0);
+  ctx.restore();
+
+  const bounce = Math.sin(time * 2) * 8;
+  ctx.font = `bold 64px ${font}`;
+  ctx.strokeStyle = '#CC6020';
+  ctx.lineWidth = 6;
+  ctx.fillStyle = '#FF8C42';
+  ctx.strokeText('Dig Carrots!', CONFIG.W / 2, 155 + bounce);
+  ctx.fillText('Dig Carrots!', CONFIG.W / 2, 155 + bounce);
+
+  ctx.font = `bold 24px ${font}`;
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 3;
+  ctx.strokeText('A Word Game for Bobo', CONFIG.W / 2, 205 + bounce * 0.5);
+  ctx.fillText('A Word Game for Bobo', CONFIG.W / 2, 205 + bounce * 0.5);
+
+  [0,1,2,3].forEach((_, i) => {
+    drawCarrot({
+      x: CONFIG.W / 2 - 135 + i * 90,
+      y: 380,
+      letters: '',
+      displayLetters: '',
+      state: 'idle',
+      animTime: 0,
+      hovered: false
+    }, time);
+  });
+
+  if (Math.sin(time * 4) > -0.3) {
+    ctx.font = `bold 26px ${font}`;
+    ctx.fillStyle = '#FFD93D';
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 3;
+    ctx.strokeText('Click anywhere to start!', CONFIG.W / 2, CONFIG.H - 40);
+    ctx.fillText('Click anywhere to start!', CONFIG.W / 2, CONFIG.H - 40);
+  }
+}
+
+function drawGameOverScreen(time) {
+  ctx.drawImage(bgCanvas, 0, 0);
+  drawSun(120, 100, 40);
+  clouds.forEach(c => drawCloud(c.x, c.y, c.w));
+
+  // Carrots in the dirt
+  [0,1,2,3].forEach((_, i) => {
+    drawCarrot({
+      x: CONFIG.W / 2 - 135 + i * 90,
+      y: 400,
+      letters: '',
+      displayLetters: '',
+      state: 'idle',
+      animTime: 0,
+      hovered: false
+    }, time);
+  });
+
+  // Flying ribbons (behind text)
+  drawRibbons();
+
+  const font = '"Chalkboard SE", "Comic Sans MS", cursive';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Decorative shovels
+  ctx.save();
+  ctx.translate(CONFIG.W / 2 - 220, 155);
+  ctx.rotate(-0.25);
+  drawShovelBlade(0, 0, 80, 40, 0);
+  ctx.restore();
+  ctx.save();
+  ctx.translate(CONFIG.W / 2 + 220, 155);
+  ctx.rotate(0.25);
+  drawShovelBlade(0, 0, 80, 40, 0);
+  ctx.restore();
+
+  // Title with Bobo's name
+  const bounce = Math.sin(time * 2) * 6;
+  ctx.font = `bold 56px ${font}`;
+  ctx.strokeStyle = '#CC6020';
+  ctx.lineWidth = 6;
+  ctx.fillStyle = '#FF8C42';
+  ctx.strokeText('Great Job, Bobo!', CONFIG.W / 2, 130 + bounce);
+  ctx.fillText('Great Job, Bobo!', CONFIG.W / 2, 130 + bounce);
+
+  // Score
+  ctx.font = `bold 34px ${font}`;
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 4;
+  ctx.strokeText(`You found ${score} out of ${CONFIG.ROUNDS} words!`, CONFIG.W / 2, 200);
+  ctx.fillText(`You found ${score} out of ${CONFIG.ROUNDS} words!`, CONFIG.W / 2, 200);
+
+  // Encouragement with Bobo's name
+  let msg = '';
+  if (score === CONFIG.ROUNDS) msg = 'Perfect score! Bobo, you are a superstar!';
+  else if (score >= 12) msg = 'Wonderful work, Bobo! You are so smart!';
+  else if (score >= 8) msg = 'Good job, Bobo! Keep practicing!';
+  else msg = 'Nice try, Bobo! Let\'s play again!';
+
+  ctx.font = `bold 26px ${font}`;
+  ctx.fillStyle = '#FFD93D';
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+  ctx.lineWidth = 3;
+  ctx.strokeText(msg, CONFIG.W / 2, 258);
+  ctx.fillText(msg, CONFIG.W / 2, 258);
+
+  // Click to play again (blinking)
+  if (Math.sin(time * 4) > -0.3) {
+    ctx.font = `bold 26px ${font}`;
+    ctx.fillStyle = '#FFD93D';
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 3;
+    ctx.strokeText('Click to play again!', CONFIG.W / 2, CONFIG.H - 35);
+    ctx.fillText('Click to play again!', CONFIG.W / 2, CONFIG.H - 35);
+  }
+}
+
+// ============================================================
+// GAME LOGIC
+// ============================================================
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function startGame() {
+  sfxStart();
+  score = 0;
+  round = 0;
+  wordOrder = shuffle(CONFIG.WORDS).slice(0, CONFIG.ROUNDS);
+  startRound();
+}
+
+function startRound() {
+  round++;
+  currentWord = wordOrder[round - 1];
+  digAnim = null;
+
+  const indices = [];
+  for (let i = 0; i < currentWord.length; i++) indices.push(i);
+  const shuffledIndices = shuffle(indices);
+  maskedIndices = shuffledIndices.slice(0, CONFIG.MASKS_PER_WORD).sort((a, b) => a - b);
+  revealedLetters = [];
+  correctLetters = maskedIndices.map(i => currentWord[i]).join('');
+  answered = false;
+
+  generateCarrots();
+  roundTimer = CONFIG.ROUND_TIME;
+  lastTickAt = -1;
+  state = STATE.PLAYING;
+  roundResult = '';
+}
+
+// Build display label with "..." between non-adjacent masked positions
+function formatCarrotLabel(rawLetters) {
+  let label = '';
+  for (let i = 0; i < rawLetters.length; i++) {
+    if (i > 0 && maskedIndices[i] - maskedIndices[i - 1] > 1) {
+      label += '..';
+    }
+    label += rawLetters[i];
+  }
+  return label;
+}
+
+function generateCarrots() {
+  // Generate distractor letter combos (same length as correctLetters)
+  const numLetters = correctLetters.length;
+  const usedCombos = new Set([correctLetters]);
+  const distractors = [];
+
+  while (distractors.length < CONFIG.CARROTS_PER_ROUND - 1) {
+    let combo = '';
+    for (let j = 0; j < numLetters; j++) {
+      combo += CONFIG.ALL_LETTERS[Math.floor(Math.random() * 26)];
+    }
+    if (!usedCombos.has(combo)) {
+      usedCombos.add(combo);
+      distractors.push(combo);
+    }
+  }
+
+  const combos = shuffle([correctLetters, ...distractors]);
+  const spacing = 180;
+  const startX = CONFIG.W / 2 - (spacing * (CONFIG.CARROTS_PER_ROUND - 1)) / 2;
+
+  carrots = combos.map((letters, i) => ({
+    x: startX + i * spacing,
+    y: 400,
+    letters,  // raw letters for comparison
+    displayLetters: formatCarrotLabel(letters), // with ".." for gaps
+    state: 'idle',
+    animTime: 0,
+    hovered: false,
+    correct: letters === correctLetters
+  }));
+}
+
+function handleCarrotClick(index) {
+  if (state !== STATE.PLAYING) return;
+  if (digAnim) return;
+  const carrot = carrots[index];
+  if (carrot.state !== 'idle') return;
+
+  if (carrot.correct) {
+    // Reveal all masked letters at once
+    revealedLetters = correctLetters.split('');
+    answered = true;
+    sfxPull();
+
+    // Start dig animation
+    carrot.state = 'scooped';
+    digAnim = {
+      phase: 'swing_down',
+      time: 0,
+      carrotIndex: index,
+      startX: SHOVEL_REST_X,
+      startY: SHOVEL_REST_Y + 30,
+      targetX: carrot.x,
+      targetY: carrot.y - 20,
+      shovelX: SHOVEL_REST_X,
+      shovelY: SHOVEL_REST_Y + 30,
+      shovelAngle: 0,
+      carrotLetters: formatCarrotLabel(correctLetters),
+      carrotDrawX: carrot.x,
+      carrotDrawY: carrot.y
+    };
+  } else {
+    carrot.state = 'shaking';
+    carrot.animTime = 0;
+    sfxWrong();
+    setTimeout(() => {
+      if (carrot.state === 'shaking') carrot.state = 'idle';
+    }, 500);
+  }
+}
+
+function endRound() {
+  state = STATE.ROUND_RESULT;
+  resultTimer = CONFIG.RESULT_PAUSE;
+}
+
+function timeoutRound() {
+  roundResult = 'timeout';
+  sfxTimeout();
+  revealedLetters = correctLetters.split('');
+  answered = true;
+  carrots.forEach(c => {
+    if (c.state === 'idle') {
+      c.state = 'rotting';
+      c.animTime = 0;
+    }
+  });
+  endRound();
+}
+
+// ============================================================
+// DIG ANIMATION
+// ============================================================
+function spawnDirtParticles(x, y, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: x + (Math.random() - 0.5) * 30,
+      y: y,
+      vx: (Math.random() - 0.5) * 180,
+      vy: -60 - Math.random() * 130,
+      life: 0.4 + Math.random() * 0.5,
+      maxLife: 0.4 + Math.random() * 0.5,
+      color: ['#8B6914','#A0724A','#6B3F23','#C4A265'][Math.floor(Math.random() * 4)],
+      size: 3 + Math.random() * 6,
+      isDirt: true
+    });
+  }
+}
+
+function spawnSparkles(x, y, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 200,
+      vy: -100 - Math.random() * 150,
+      life: 0.6 + Math.random() * 0.6,
+      maxLife: 0.6 + Math.random() * 0.6,
+      color: ['#FFD700','#FF6B6B','#4ECDC4','#FFE66D','#FF8C42'][Math.floor(Math.random() * 5)],
+      size: 3 + Math.random() * 5,
+      isDirt: false
+    });
+  }
+}
+
+function updateDigAnim(dt) {
+  if (!digAnim) return;
+  digAnim.time += dt;
+  const a = digAnim;
+
+  if (a.phase === 'swing_down') {
+    const dur = 0.3;
+    const t = Math.min(a.time / dur, 1);
+    const ease = t * t; // easeInQuad
+
+    a.shovelX = a.startX + (a.targetX - a.startX) * ease;
+    a.shovelY = a.startY + (a.targetY - a.startY) * ease;
+    a.shovelY -= Math.sin(t * Math.PI) * 50; // arc
+    a.shovelAngle = ease * 0.6; // tip forward
+
+    if (t >= 1) {
+      a.phase = 'scoop';
+      a.time = 0;
+      spawnDirtParticles(a.targetX, a.targetY + 20, 18);
+      sfxDig();
+    }
+  } else if (a.phase === 'scoop') {
+    const dur = 0.2;
+    const t = Math.min(a.time / dur, 1);
+    a.shovelAngle = 0.6 + t * 0.2;
+    a.shovelY = a.targetY + t * 15;
+
+    if (t >= 1) {
+      a.phase = 'fly_up';
+      a.time = 0;
+      a.carrotDrawX = a.shovelX;
+      a.carrotDrawY = a.shovelY + 30;
+    }
+  } else if (a.phase === 'fly_up') {
+    const dur = 0.45;
+    const t = Math.min(a.time / dur, 1);
+    const ease = 1 - (1 - t) * (1 - t); // easeOutQuad
+
+    a.shovelX = a.targetX + (a.startX - a.targetX) * ease;
+    a.shovelY = (a.targetY + 15) + (a.startY - a.targetY - 15) * ease;
+    a.shovelY -= Math.sin(t * Math.PI) * 70;
+    a.shovelAngle = 0.8 * (1 - ease);
+
+    // Carrot rides along
+    a.carrotDrawX = a.shovelX;
+    a.carrotDrawY = a.shovelY + 35;
+
+    // Trailing dirt
+    if (Math.random() < 0.4) {
+      spawnDirtParticles(a.shovelX, a.shovelY + 30, 1);
+    }
+
+    if (t >= 1) {
+      digAnim = null;
+      spawnSparkles(a.startX, a.startY, 15);
+      score++;
+      roundResult = 'correct';
+      setTimeout(sfxCorrect, 100);
+      endRound();
+    }
+  }
+}
+
+function drawDigAnim() {
+  if (!digAnim) return;
+  const a = digAnim;
+
+  // Draw mini carrot being carried during fly_up
+  if (a.phase === 'fly_up') {
+    drawCarrot({
+      x: a.carrotDrawX,
+      y: a.carrotDrawY,
+      letters: a.carrotLetters,
+      displayLetters: a.carrotLetters,
+      state: 'idle',
+      animTime: 0,
+      hovered: false
+    }, totalTime);
+  }
+
+  // Draw the action shovel
+  drawActionShovel(a.shovelX, a.shovelY, a.shovelAngle,
+    a.carrotLetters, a.phase === 'fly_up');
+}
+
+// ============================================================
+// PARTICLES
+// ============================================================
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 300 * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = Math.max(0, p.life / p.maxLife);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    const s = p.size * alpha;
+
+    if (p.isDirt) {
+      // Dirt: irregular lumps
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, s * 1.2, s * 0.8, p.vx * 0.01, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Sparkle: star shape
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        const a = (i * 4 * Math.PI) / 5 - Math.PI / 2;
+        const method = i === 0 ? 'moveTo' : 'lineTo';
+        ctx[method](p.x + Math.cos(a) * s, p.y + Math.sin(a) * s);
+        const a2 = a + (2 * Math.PI) / 10;
+        ctx.lineTo(p.x + Math.cos(a2) * s * 0.4, p.y + Math.sin(a2) * s * 0.4);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ============================================================
+// UPDATE & RENDER
+// ============================================================
+let lastTime = 0;
+let totalTime = 0;
+
+function update(dt) {
+  totalTime += dt;
+
+  if (state === STATE.PLAYING) {
+    // Pause timer during dig animation
+    if (!digAnim) {
+      roundTimer -= dt;
+    }
+
+    if (roundTimer <= 3 && roundTimer > 0) {
+      const sec = Math.ceil(roundTimer);
+      if (sec !== lastTickAt) {
+        lastTickAt = sec;
+        sfxTick();
+      }
+    }
+
+    if (roundTimer <= 0 && !digAnim) {
+      roundTimer = 0;
+      timeoutRound();
+    }
+
+    carrots.forEach(c => {
+      if (c.state === 'pulling' || c.state === 'shaking' || c.state === 'rotting') {
+        c.animTime += dt;
+      }
+    });
+
+    updateDigAnim(dt);
+  }
+
+  if (state === STATE.ROUND_RESULT) {
+    resultTimer -= dt;
+    carrots.forEach(c => {
+      if (c.state === 'pulling' || c.state === 'shaking' || c.state === 'rotting') {
+        c.animTime += dt;
+      }
+    });
+    if (resultTimer <= 0) {
+      if (round >= CONFIG.ROUNDS) {
+        state = STATE.GAME_OVER;
+        sfxGameOver();
+        spawnRibbons();
+      } else {
+        startRound();
+      }
+    }
+  }
+
+  updateParticles(dt);
+  if (state === STATE.GAME_OVER) updateRibbons(dt);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, CONFIG.W, CONFIG.H);
+
+  if (state === STATE.TITLE) {
+    drawTitleScreen(totalTime);
+    return;
+  }
+
+  if (state === STATE.GAME_OVER) {
+    drawGameOverScreen(totalTime);
+    drawParticles();
+    return;
+  }
+
+  // Playing or Round Result
+  ctx.drawImage(bgCanvas, 0, 0);
+  drawSun(120, 100, 40);
+  clouds.forEach(c => drawCloud(c.x + Math.sin(totalTime * 0.3 + c.y) * 10, c.y, c.w));
+
+  // Draw carrots
+  carrots.forEach((c, i) => {
+    c.hovered = (i === hoveredCarrot) && state === STATE.PLAYING && !digAnim;
+    drawCarrot(c, totalTime);
+  });
+
+  // Draw dig animation (shovel + carried carrot) above carrots
+  drawDigAnim();
+
+  // HUD (score, timer, shovel-word)
+  drawHUD();
+
+  // Result feedback text
+  if (state === STATE.ROUND_RESULT) {
+    const font = '"Chalkboard SE", "Comic Sans MS", cursive';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold 36px ${font}`;
+
+    if (roundResult === 'correct') {
+      ctx.fillStyle = '#4CAF50';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4;
+      ctx.strokeText(`Yes! ${currentWord}!`, CONFIG.W / 2, 270);
+      ctx.fillText(`Yes! ${currentWord}!`, CONFIG.W / 2, 270);
+    } else if (roundResult === 'timeout') {
+      ctx.fillStyle = '#FF6B6B';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4;
+      ctx.strokeText(`Time's up! It was ${currentWord}`, CONFIG.W / 2, 270);
+      ctx.fillText(`Time's up! It was ${currentWord}`, CONFIG.W / 2, 270);
+    }
+  }
+
+  drawParticles();
+}
+
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+  update(dt);
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) / scale,
+    y: (e.clientY - rect.top) / scale
+  };
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  if (state !== STATE.PLAYING || digAnim) { hoveredCarrot = -1; canvas.style.cursor = 'default'; return; }
+  const pos = getCanvasPos(e);
+  hoveredCarrot = -1;
+  carrots.forEach((c, i) => {
+    if (c.state === 'idle' && pos.x > c.x - 35 && pos.x < c.x + 35 && pos.y > c.y - 50 && pos.y < c.y + 90) {
+      hoveredCarrot = i;
+      canvas.style.cursor = 'pointer';
+    }
+  });
+  if (hoveredCarrot === -1) canvas.style.cursor = 'default';
+});
+
+canvas.addEventListener('click', (e) => {
+  ensureAudio();
+  const pos = getCanvasPos(e);
+
+  if (state === STATE.TITLE) {
+    startGame();
+    return;
+  }
+
+  if (state === STATE.GAME_OVER) {
+    state = STATE.TITLE;
+    return;
+  }
+
+  if (state === STATE.PLAYING && !digAnim) {
+    carrots.forEach((c, i) => {
+      if (c.state === 'idle' && pos.x > c.x - 35 && pos.x < c.x + 35 && pos.y > c.y - 50 && pos.y < c.y + 90) {
+        handleCarrotClick(i);
+      }
+    });
+  }
+});
+
+// ============================================================
+// BOOT
+// ============================================================
+renderBackground();
+requestAnimationFrame((t) => {
+  lastTime = t;
+  gameLoop(t);
+});
+</script>
+</body>
+</html>
