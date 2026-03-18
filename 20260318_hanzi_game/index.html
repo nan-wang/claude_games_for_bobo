@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>汉字大冒险 - Bobo的识字游戏</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #2a1a4e;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+canvas {
+  display: block;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const W = 960, H = 540;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = W;
+canvas.height = H;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  scale = Math.min(ww / W, wh / H);
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+  offsetX = (ww - W * scale) / 2;
+  offsetY = (wh - H * scale) / 2;
+  canvas.style.position = 'absolute';
+  canvas.style.left = offsetX + 'px';
+  canvas.style.top = offsetY + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// AUDIO
+// ============================================================
+let audioCtx;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playTone(freq, dur, type = 'sine', vol = 0.1, slide = 0) {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audioCtx.currentTime + dur);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + dur);
+}
+
+function sfxCorrect() {
+  [523, 659, 784].forEach((f, i) => setTimeout(() => playTone(f, 0.2, 'sine', 0.12), i * 100));
+}
+function sfxWrong() {
+  playTone(233, 0.15, 'triangle', 0.08);
+  setTimeout(() => playTone(200, 0.2, 'triangle', 0.08), 80);
+}
+function sfxMorph() {
+  [400, 500, 600, 800].forEach((f, i) => setTimeout(() => playTone(f, 0.15, 'sine', 0.06), i * 60));
+}
+function sfxVictory() {
+  [392, 494, 587, 784, 587, 784, 1047].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.25, 'sine', 0.1), i * 120));
+}
+function sfxStart() {
+  [523, 659, 784, 1047].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.15, 'sine', 0.1), i * 80));
+}
+function sfxAdvance() {
+  playTone(600, 0.15, 'sine', 0.08, 200);
+}
+
+// ============================================================
+// CHARACTER DATA
+// ============================================================
+const CHARS = [
+  { char: '日', pinyin: 'rì', label: '太阳', draw: drawSun_pic },
+  { char: '月', pinyin: 'yuè', label: '月亮', draw: drawMoon_pic },
+  { char: '山', pinyin: 'shān', label: '大山', draw: drawMountain_pic },
+  { char: '水', pinyin: 'shuǐ', label: '水', draw: drawWater_pic },
+  { char: '火', pinyin: 'huǒ', label: '火', draw: drawFire_pic },
+  { char: '口', pinyin: 'kǒu', label: '嘴巴', draw: drawMouth_pic },
+  { char: '目', pinyin: 'mù', label: '眼睛', draw: drawEye_pic },
+  { char: '耳', pinyin: 'ěr', label: '耳朵', draw: drawEar_pic },
+  { char: '田', pinyin: 'tián', label: '田地', draw: drawField_pic },
+  { char: '人', pinyin: 'rén', label: '人', draw: drawPerson_pic },
+];
+
+const ENCOURAGEMENTS = ['棒棒的！', '太聪明了！', '真厉害！', '好极了！', '太棒了！', '答对了！'];
+
+// ============================================================
+// PICTURE DRAWING FUNCTIONS
+// ============================================================
+function drawSun_pic(cx, cy, size) {
+  const r = size * 0.35;
+  // Rays
+  ctx.strokeStyle = '#FFD700';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * r * 1.2, cy + Math.sin(a) * r * 1.2);
+    ctx.lineTo(cx + Math.cos(a) * r * 1.6, cy + Math.sin(a) * r * 1.6);
+    ctx.stroke();
+  }
+  // Body
+  const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  grd.addColorStop(0, '#FFF176');
+  grd.addColorStop(1, '#FF9800');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  // Face
+  ctx.fillStyle = '#5D4037';
+  ctx.beginPath();
+  ctx.arc(cx - r * 0.25, cy - r * 0.15, r * 0.08, 0, Math.PI * 2);
+  ctx.arc(cx + r * 0.25, cy - r * 0.15, r * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#5D4037';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy + r * 0.1, r * 0.2, 0, Math.PI);
+  ctx.stroke();
+}
+
+function drawMoon_pic(cx, cy, size) {
+  const r = size * 0.32;
+  // Glow
+  const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.8);
+  glow.addColorStop(0, 'rgba(255,255,200,0.3)');
+  glow.addColorStop(1, 'rgba(255,255,200,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(cx - r * 2, cy - r * 2, r * 4, r * 4);
+  // Crescent
+  ctx.fillStyle = '#FDD835';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#2a1a4e';
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.4, cy - r * 0.1, r * 0.75, 0, Math.PI * 2);
+  ctx.fill();
+  // Stars
+  const stars = [[-0.8, -0.7], [0.7, -0.5], [-0.5, 0.8], [0.9, 0.6], [0.2, -0.9]];
+  ctx.fillStyle = '#FFF9C4';
+  stars.forEach(([sx, sy]) => {
+    drawStar(cx + sx * size * 0.45, cy + sy * size * 0.4, 3 + Math.random() * 2, 5);
+  });
+}
+
+function drawMountain_pic(cx, cy, size) {
+  const w = size * 0.8, h = size * 0.6;
+  const baseY = cy + h * 0.35;
+  // Back mountain
+  ctx.fillStyle = '#388E3C';
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.45, baseY);
+  ctx.lineTo(cx - w * 0.15, baseY - h * 0.65);
+  ctx.lineTo(cx + w * 0.1, baseY);
+  ctx.fill();
+  // Right mountain
+  ctx.fillStyle = '#2E7D32';
+  ctx.beginPath();
+  ctx.moveTo(cx + w * 0.05, baseY);
+  ctx.lineTo(cx + w * 0.3, baseY - h * 0.55);
+  ctx.lineTo(cx + w * 0.5, baseY);
+  ctx.fill();
+  // Center mountain (tallest)
+  ctx.fillStyle = '#43A047';
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.3, baseY);
+  ctx.lineTo(cx, baseY - h);
+  ctx.lineTo(cx + w * 0.3, baseY);
+  ctx.fill();
+  // Snow caps
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.06, baseY - h * 0.85);
+  ctx.lineTo(cx, baseY - h);
+  ctx.lineTo(cx + w * 0.06, baseY - h * 0.85);
+  ctx.quadraticCurveTo(cx, baseY - h * 0.8, cx - w * 0.06, baseY - h * 0.85);
+  ctx.fill();
+}
+
+function drawWater_pic(cx, cy, size) {
+  const w = size * 0.7;
+  ctx.strokeStyle = '#42A5F5';
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  for (let row = 0; row < 3; row++) {
+    const y = cy - size * 0.2 + row * size * 0.22;
+    const ww = w * (1 - row * 0.15);
+    ctx.beginPath();
+    ctx.moveTo(cx - ww / 2, y);
+    ctx.quadraticCurveTo(cx - ww / 4, y - 8, cx, y);
+    ctx.quadraticCurveTo(cx + ww / 4, y + 8, cx + ww / 2, y);
+    ctx.stroke();
+  }
+  // Droplets
+  ctx.fillStyle = '#64B5F6';
+  [[-0.2, 0.35], [0.15, 0.4], [0, 0.5]].forEach(([dx, dy]) => {
+    const x = cx + dx * size, y = cy + dy * size;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 6);
+    ctx.quadraticCurveTo(x + 5, y + 2, x, y + 5);
+    ctx.quadraticCurveTo(x - 5, y + 2, x, y - 6);
+    ctx.fill();
+  });
+}
+
+function drawFire_pic(cx, cy, size) {
+  const h = size * 0.7;
+  // Outer flame (red)
+  ctx.fillStyle = '#F44336';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h * 0.5);
+  ctx.bezierCurveTo(cx + h * 0.35, cy - h * 0.2, cx + h * 0.3, cy + h * 0.2, cx, cy + h * 0.35);
+  ctx.bezierCurveTo(cx - h * 0.3, cy + h * 0.2, cx - h * 0.35, cy - h * 0.2, cx, cy - h * 0.5);
+  ctx.fill();
+  // Middle flame (orange)
+  ctx.fillStyle = '#FF9800';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h * 0.35);
+  ctx.bezierCurveTo(cx + h * 0.22, cy - h * 0.1, cx + h * 0.2, cy + h * 0.15, cx, cy + h * 0.25);
+  ctx.bezierCurveTo(cx - h * 0.2, cy + h * 0.15, cx - h * 0.22, cy - h * 0.1, cx, cy - h * 0.35);
+  ctx.fill();
+  // Inner flame (yellow)
+  ctx.fillStyle = '#FFEB3B';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h * 0.15);
+  ctx.bezierCurveTo(cx + h * 0.1, cy, cx + h * 0.08, cy + h * 0.12, cx, cy + h * 0.15);
+  ctx.bezierCurveTo(cx - h * 0.08, cy + h * 0.12, cx - h * 0.1, cy, cx, cy - h * 0.15);
+  ctx.fill();
+}
+
+function drawMouth_pic(cx, cy, size) {
+  const w = size * 0.45, h = size * 0.35;
+  // Lips outline
+  ctx.fillStyle = '#EF9A9A';
+  roundRect_path(cx - w / 2, cy - h / 2, w, h, 15);
+  ctx.fill();
+  // Inner mouth
+  ctx.fillStyle = '#C62828';
+  roundRect_path(cx - w * 0.35, cy - h * 0.3, w * 0.7, h * 0.6, 10);
+  ctx.fill();
+  // Tongue
+  ctx.fillStyle = '#EF5350';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + h * 0.15, w * 0.2, h * 0.15, 0, 0, Math.PI);
+  ctx.fill();
+  // Teeth
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(cx - w * 0.15, cy - h * 0.3, w * 0.14, h * 0.15);
+  ctx.fillRect(cx + w * 0.02, cy - h * 0.3, w * 0.14, h * 0.15);
+}
+
+function drawEye_pic(cx, cy, size) {
+  const w = size * 0.5, h = size * 0.3;
+  // Eye white
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#5D4037';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  // Iris
+  ctx.fillStyle = '#5D4037';
+  ctx.beginPath();
+  ctx.arc(cx, cy, h * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  // Pupil
+  ctx.fillStyle = '#212121';
+  ctx.beginPath();
+  ctx.arc(cx, cy, h * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  // Highlight
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(cx - h * 0.1, cy - h * 0.1, h * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  // Eyelashes
+  ctx.strokeStyle = '#5D4037';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 5; i++) {
+    const a = Math.PI + (i / 4) * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * w * 0.48, cy + Math.sin(a) * h * 0.48);
+    ctx.lineTo(cx + Math.cos(a) * w * 0.6, cy + Math.sin(a) * h * 0.65);
+    ctx.stroke();
+  }
+}
+
+function drawEar_pic(cx, cy, size) {
+  const w = size * 0.3, h = size * 0.5;
+  // Outer ear
+  ctx.fillStyle = '#FFCC80';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, w, h, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#E6A050';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  // Inner ear
+  ctx.fillStyle = '#FFE0B2';
+  ctx.beginPath();
+  ctx.ellipse(cx + w * 0.1, cy, w * 0.55, h * 0.65, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Ear canal hint
+  ctx.strokeStyle = '#E6A050';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx + w * 0.15, cy + h * 0.05, w * 0.25, -0.5, Math.PI + 0.5);
+  ctx.stroke();
+}
+
+function drawField_pic(cx, cy, size) {
+  const s = size * 0.55;
+  const x0 = cx - s / 2, y0 = cy - s / 2;
+  // Green field
+  const colors = ['#66BB6A', '#81C784', '#4CAF50', '#A5D6A7'];
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 2; c++) {
+      ctx.fillStyle = colors[r * 2 + c];
+      ctx.fillRect(x0 + c * s / 2, y0 + r * s / 2, s / 2, s / 2);
+    }
+  }
+  // Grid lines (brown paths)
+  ctx.strokeStyle = '#8D6E63';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(x0, y0, s, s);
+  ctx.beginPath();
+  ctx.moveTo(cx, y0); ctx.lineTo(cx, y0 + s);
+  ctx.moveTo(x0, cy); ctx.lineTo(x0 + s, cy);
+  ctx.stroke();
+  // Little crops
+  ctx.fillStyle = '#33691E';
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 2; c++) {
+      const px = x0 + c * s / 2 + s / 4;
+      const py = y0 + r * s / 2 + s / 4;
+      ctx.beginPath();
+      ctx.moveTo(px, py + 4);
+      ctx.lineTo(px - 3, py - 5);
+      ctx.moveTo(px, py + 4);
+      ctx.lineTo(px + 3, py - 5);
+      ctx.strokeStyle = '#33691E';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+}
+
+function drawPerson_pic(cx, cy, size) {
+  const s = size * 0.6;
+  // Head
+  ctx.fillStyle = '#FFCC80';
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.35, s * 0.15, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#E6A050';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // Eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(cx - s * 0.05, cy - s * 0.37, 2, 0, Math.PI * 2);
+  ctx.arc(cx + s * 0.05, cy - s * 0.37, 2, 0, Math.PI * 2);
+  ctx.fill();
+  // Smile
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy - s * 0.32, s * 0.05, 0, Math.PI);
+  ctx.stroke();
+  // Body
+  ctx.strokeStyle = '#42A5F5';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - s * 0.2);
+  ctx.lineTo(cx, cy + s * 0.1);
+  ctx.stroke();
+  // Arms
+  ctx.strokeStyle = '#FFCC80';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.2, cy - s * 0.05);
+  ctx.lineTo(cx, cy - s * 0.12);
+  ctx.lineTo(cx + s * 0.22, cy - s * 0.15);
+  ctx.stroke();
+  // Legs (walking pose)
+  ctx.strokeStyle = '#5D4037';
+  ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.15, cy + s * 0.35);
+  ctx.lineTo(cx, cy + s * 0.1);
+  ctx.lineTo(cx + s * 0.12, cy + s * 0.35);
+  ctx.stroke();
+}
+
+// ============================================================
+// UTILITY DRAWING
+// ============================================================
+function drawStar(cx, cy, r, points) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * 0.4;
+    const method = i === 0 ? 'moveTo' : 'lineTo';
+    ctx[method](cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function roundRect_path(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const STATE = {
+  TITLE: 0,
+  LEARN_SHOW: 1,
+  LEARN_MORPH: 2,
+  LEARN_CHAR: 3,
+  QUIZ: 4,
+  QUIZ_CORRECT: 5,
+  VICTORY: 6
+};
+
+let state = STATE.TITLE;
+let currentIndex = 0;
+let stateTimer = 0;
+let totalTime = 0;
+let particles = [];
+let quizChoices = [];
+let hoveredChoice = -1;
+let encourageMsg = '';
+let wrongAnim = { active: false, index: -1, time: 0 };
+
+// Confetti for victory
+let confetti = [];
+const CONFETTI_COLORS = ['#FF6B6B','#FFD93D','#4ECDC4','#FF8C42','#A78BFA','#34D399','#F472B6','#60A5FA'];
+
+// ============================================================
+// PARTICLES
+// ============================================================
+function spawnSparkles(x, y, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 200,
+      vy: -80 - Math.random() * 120,
+      life: 0.6 + Math.random() * 0.6,
+      maxLife: 0.6 + Math.random() * 0.6,
+      color: ['#FFD700','#FF6B6B','#4ECDC4','#FFE66D','#FF8C42','#A78BFA'][Math.floor(Math.random() * 6)],
+      size: 3 + Math.random() * 5
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 200 * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = Math.max(0, p.life / p.maxLife);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    const s = p.size * alpha;
+    drawStar(p.x, p.y, s, 5);
+    ctx.globalAlpha = 1;
+  });
+}
+
+// Confetti
+function spawnConfetti() {
+  confetti = [];
+  for (let i = 0; i < 50; i++) {
+    confetti.push({
+      x: Math.random() * W,
+      y: -20 - Math.random() * 300,
+      vx: (Math.random() - 0.5) * 60,
+      vy: 40 + Math.random() * 80,
+      w: 6 + Math.random() * 8,
+      h: 14 + Math.random() * 16,
+      rot: Math.random() * Math.PI * 2,
+      rotV: (Math.random() - 0.5) * 4,
+      color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+      wobble: Math.random() * Math.PI * 2,
+      wobbleSpeed: 1.5 + Math.random() * 2
+    });
+  }
+}
+
+function updateConfetti(dt) {
+  confetti.forEach(r => {
+    r.wobble += r.wobbleSpeed * dt;
+    r.x += (r.vx + Math.sin(r.wobble) * 30) * dt;
+    r.y += r.vy * dt;
+    r.rot += r.rotV * dt;
+    if (r.y > H + 30) {
+      r.y = -20 - Math.random() * 40;
+      r.x = Math.random() * W;
+    }
+  });
+}
+
+function drawConfetti() {
+  confetti.forEach(r => {
+    ctx.save();
+    ctx.translate(r.x, r.y);
+    ctx.rotate(r.rot);
+    ctx.fillStyle = r.color;
+    ctx.beginPath();
+    ctx.moveTo(-r.w / 2, -r.h / 2);
+    ctx.quadraticCurveTo(r.w * 0.3, -r.h * 0.1, r.w / 2, -r.h / 2);
+    ctx.lineTo(r.w / 2, r.h / 2);
+    ctx.quadraticCurveTo(-r.w * 0.3, r.h * 0.1, -r.w / 2, r.h / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.fillRect(-r.w / 4, -r.h / 2, r.w / 4, r.h);
+    ctx.restore();
+  });
+}
+
+// ============================================================
+// BACKGROUND
+// ============================================================
+function drawBackground() {
+  // Gradient sky (purple-ish for magic theme)
+  const grd = ctx.createLinearGradient(0, 0, 0, H);
+  grd.addColorStop(0, '#1a0a3e');
+  grd.addColorStop(0.5, '#2a1a5e');
+  grd.addColorStop(1, '#3a2a6e');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  // Floating sparkle dots
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  for (let i = 0; i < 30; i++) {
+    const x = (i * 137.5 + totalTime * 10) % W;
+    const y = (i * 73.1 + Math.sin(totalTime + i) * 20) % H;
+    const s = 1 + Math.sin(totalTime * 2 + i) * 0.5;
+    ctx.beginPath();
+    ctx.arc(x, y, s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ============================================================
+// PROGRESS BAR (stars)
+// ============================================================
+function drawProgressBar() {
+  const startX = W / 2 - 10 * 22;
+  const y = 25;
+  for (let i = 0; i < 10; i++) {
+    const x = startX + i * 44;
+    ctx.fillStyle = i < currentIndex ? '#FFD700' : 'rgba(255,255,255,0.2)';
+    drawStar(x + 22, y, i < currentIndex ? 12 : 10, 5);
+    if (i < currentIndex) {
+      ctx.strokeStyle = '#FF8C00';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+}
+
+// ============================================================
+// DRAW CHARACTER (large, for morph/char screens)
+// ============================================================
+function drawCharLarge(char, cx, cy, size, color) {
+  ctx.font = `bold ${size}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color || '#fff';
+  ctx.fillText(char, cx, cy);
+}
+
+// ============================================================
+// QUIZ BUTTON LAYOUT
+// ============================================================
+const BTN_W = 120, BTN_H = 80, BTN_GAP = 30;
+function getButtonPositions() {
+  const total = 4 * BTN_W + 3 * BTN_GAP;
+  const startX = W / 2 - total / 2;
+  const y = H - 110;
+  return Array.from({length: 4}, (_, i) => ({
+    x: startX + i * (BTN_W + BTN_GAP),
+    y: y,
+    w: BTN_W,
+    h: BTN_H
+  }));
+}
+
+// ============================================================
+// STATE TRANSITIONS
+// ============================================================
+function startLearning(index) {
+  currentIndex = index;
+  state = STATE.LEARN_SHOW;
+  stateTimer = 0;
+  sfxAdvance();
+}
+
+function generateQuiz() {
+  const current = CHARS[currentIndex];
+  const others = CHARS.filter((_, i) => i !== currentIndex);
+  const shuffled = shuffle(others).slice(0, 3);
+  const choices = shuffle([current, ...shuffled]);
+  quizChoices = choices;
+  state = STATE.QUIZ;
+  stateTimer = 0;
+  hoveredChoice = -1;
+  wrongAnim = { active: false, index: -1, time: 0 };
+}
+
+function handleQuizChoice(index) {
+  if (wrongAnim.active) return;
+  const chosen = quizChoices[index];
+  if (chosen.char === CHARS[currentIndex].char) {
+    sfxCorrect();
+    encourageMsg = ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)];
+    const btns = getButtonPositions();
+    spawnSparkles(btns[index].x + BTN_W / 2, btns[index].y + BTN_H / 2, 20);
+    state = STATE.QUIZ_CORRECT;
+    stateTimer = 0;
+  } else {
+    sfxWrong();
+    wrongAnim = { active: true, index: index, time: 0 };
+  }
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+let lastTime = 0;
+
+function update(dt) {
+  totalTime += dt;
+  stateTimer += dt;
+  updateParticles(dt);
+
+  if (wrongAnim.active) {
+    wrongAnim.time += dt;
+    if (wrongAnim.time > 0.5) {
+      wrongAnim.active = false;
+    }
+  }
+
+  if (state === STATE.LEARN_SHOW && stateTimer >= 2.0) {
+    state = STATE.LEARN_MORPH;
+    stateTimer = 0;
+    sfxMorph();
+  }
+
+  if (state === STATE.LEARN_MORPH && stateTimer >= 2.0) {
+    state = STATE.LEARN_CHAR;
+    stateTimer = 0;
+  }
+
+  if (state === STATE.LEARN_CHAR && stateTimer >= 2.0) {
+    generateQuiz();
+  }
+
+  if (state === STATE.QUIZ_CORRECT && stateTimer >= 1.5) {
+    if (currentIndex >= 9) {
+      state = STATE.VICTORY;
+      stateTimer = 0;
+      sfxVictory();
+      spawnConfetti();
+    } else {
+      startLearning(currentIndex + 1);
+    }
+  }
+
+  if (state === STATE.VICTORY) {
+    updateConfetti(dt);
+  }
+}
+
+// ============================================================
+// DRAW
+// ============================================================
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+
+  if (state === STATE.TITLE) {
+    drawTitleScreen();
+  } else if (state === STATE.VICTORY) {
+    drawVictoryScreen();
+  } else {
+    drawProgressBar();
+    if (state === STATE.LEARN_SHOW) drawLearnShow();
+    else if (state === STATE.LEARN_MORPH) drawLearnMorph();
+    else if (state === STATE.LEARN_CHAR) drawLearnChar();
+    else if (state === STATE.QUIZ) drawQuiz();
+    else if (state === STATE.QUIZ_CORRECT) drawQuizCorrect();
+  }
+
+  drawParticles();
+}
+
+function drawTitleScreen() {
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Floating characters in background
+  CHARS.forEach((ch, i) => {
+    const x = W * 0.1 + (i % 5) * (W * 0.2);
+    const y = 100 + Math.floor(i / 5) * 180 + Math.sin(totalTime * 1.5 + i * 0.7) * 15;
+    ctx.globalAlpha = 0.15;
+    ctx.font = `bold 60px ${font}`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(ch.char, x, y);
+    ctx.globalAlpha = 1;
+  });
+
+  // Title
+  const bounce = Math.sin(totalTime * 2) * 8;
+  ctx.font = `bold 72px ${font}`;
+  ctx.strokeStyle = '#FF8C42';
+  ctx.lineWidth = 6;
+  ctx.fillStyle = '#FFD93D';
+  ctx.strokeText('汉字大冒险', W / 2, 200 + bounce);
+  ctx.fillText('汉字大冒险', W / 2, 200 + bounce);
+
+  ctx.font = `bold 28px ${font}`;
+  ctx.fillStyle = '#E0E0FF';
+  ctx.fillText('和Bobo一起学汉字', W / 2, 280);
+
+  // Start prompt
+  if (Math.sin(totalTime * 4) > -0.3) {
+    ctx.font = `bold 24px ${font}`;
+    ctx.fillStyle = '#FFD93D';
+    ctx.fillText('按任意键开始', W / 2, H - 60);
+  }
+}
+
+function drawLearnShow() {
+  const ch = CHARS[currentIndex];
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+  // Picture
+  ch.draw(W / 2, H / 2 - 30, 200);
+
+  // Label
+  ctx.font = `bold 36px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`这是${ch.label}`, W / 2, H / 2 + 100);
+
+  // Skip hint
+  ctx.font = `18px ${font}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText('点击跳过', W / 2, H - 30);
+}
+
+function drawLearnMorph() {
+  const ch = CHARS[currentIndex];
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const t = Math.min(stateTimer / 1.5, 1); // morph progress
+
+  // Crossfade: picture fades out, character fades in
+  const picAlpha = 1 - t;
+  const charAlpha = t;
+  const charScale = 0.5 + t * 0.5;
+
+  // Picture (fading)
+  ctx.globalAlpha = picAlpha;
+  ch.draw(W / 2, H / 2 - 30, 200 * (1 - t * 0.3));
+  ctx.globalAlpha = 1;
+
+  // Character (fading in + scaling up)
+  ctx.globalAlpha = charAlpha;
+  ctx.save();
+  ctx.translate(W / 2, H / 2 - 30);
+  ctx.scale(charScale, charScale);
+  ctx.font = `bold 140px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#FFD700';
+  ctx.strokeStyle = '#FF8C00';
+  ctx.lineWidth = 3;
+  ctx.strokeText(ch.char, 0, 0);
+  ctx.fillText(ch.char, 0, 0);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+
+  // Sparkle particles during morph
+  if (Math.random() < 0.3) {
+    spawnSparkles(W / 2 + (Math.random() - 0.5) * 100, H / 2 - 30 + (Math.random() - 0.5) * 80, 1);
+  }
+
+  // Label
+  ctx.font = `bold 30px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`${ch.label} → ${ch.char}`, W / 2, H / 2 + 110);
+}
+
+function drawLearnChar() {
+  const ch = CHARS[currentIndex];
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+  // Large character
+  ctx.font = `bold 160px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#FFD700';
+  ctx.strokeStyle = '#FF8C00';
+  ctx.lineWidth = 4;
+  ctx.strokeText(ch.char, W / 2, H / 2 - 40);
+  ctx.fillText(ch.char, W / 2, H / 2 - 40);
+
+  // Pinyin
+  ctx.font = `28px ${font}`;
+  ctx.fillStyle = '#E0E0FF';
+  ctx.fillText(ch.pinyin, W / 2, H / 2 + 60);
+
+  // Chinese label
+  ctx.font = `bold 32px ${font}`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText(ch.label, W / 2, H / 2 + 100);
+
+  // Skip hint
+  ctx.font = `18px ${font}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText('点击跳过', W / 2, H - 30);
+}
+
+function drawQuiz() {
+  const ch = CHARS[currentIndex];
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+  // Small picture hint at top
+  ctx.save();
+  ctx.translate(W / 2, 130);
+  ctx.scale(0.6, 0.6);
+  ch.draw(0, 0, 140);
+  ctx.restore();
+
+  // Question
+  ctx.font = `bold 32px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('这是哪个字？', W / 2, 250);
+
+  // Buttons
+  const btns = getButtonPositions();
+  btns.forEach((btn, i) => {
+    const isWrong = wrongAnim.active && wrongAnim.index === i;
+    const shakeX = isWrong ? Math.sin(wrongAnim.time * 40) * 8 * Math.max(0, 1 - wrongAnim.time / 0.5) : 0;
+    const isHovered = hoveredChoice === i && !wrongAnim.active;
+
+    ctx.save();
+    ctx.translate(shakeX, 0);
+
+    // Button bg
+    const bgColor = isWrong ? 'rgba(244,67,54,0.4)' : isHovered ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)';
+    roundRect_path(btn.x, btn.y, btn.w, btn.h, 12);
+    ctx.fillStyle = bgColor;
+    ctx.fill();
+    ctx.strokeStyle = isWrong ? '#F44336' : isHovered ? '#FFD700' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Character
+    ctx.font = `bold 42px ${font}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = isWrong ? '#EF9A9A' : '#fff';
+    ctx.fillText(quizChoices[i].char, btn.x + btn.w / 2, btn.y + btn.h / 2);
+
+    // Number hint
+    ctx.font = `14px ${font}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fillText(i + 1, btn.x + btn.w / 2, btn.y + btn.h - 10);
+
+    ctx.restore();
+  });
+
+  // "再试一次" message
+  if (wrongAnim.active) {
+    ctx.font = `bold 24px ${font}`;
+    ctx.fillStyle = '#FF8A80';
+    ctx.textAlign = 'center';
+    ctx.fillText('再试一次！', W / 2, 300);
+  }
+}
+
+function drawQuizCorrect() {
+  const ch = CHARS[currentIndex];
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+  // Big character with green glow
+  const glow = ctx.createRadialGradient(W / 2, H / 2 - 30, 10, W / 2, H / 2 - 30, 120);
+  glow.addColorStop(0, 'rgba(76,175,80,0.3)');
+  glow.addColorStop(1, 'rgba(76,175,80,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.font = `bold 140px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#4CAF50';
+  ctx.strokeStyle = '#2E7D32';
+  ctx.lineWidth = 4;
+  ctx.strokeText(ch.char, W / 2, H / 2 - 40);
+  ctx.fillText(ch.char, W / 2, H / 2 - 40);
+
+  // Encouragement
+  const bounce = Math.sin(totalTime * 6) * 5;
+  ctx.font = `bold 40px ${font}`;
+  ctx.fillStyle = '#FFD700';
+  ctx.strokeStyle = '#FF8C00';
+  ctx.lineWidth = 3;
+  ctx.strokeText(encourageMsg, W / 2, H / 2 + 70 + bounce);
+  ctx.fillText(encourageMsg, W / 2, H / 2 + 70 + bounce);
+}
+
+function drawVictoryScreen() {
+  const font = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+
+  drawConfetti();
+
+  // All 10 characters in a row
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const startX = W / 2 - 9 * 22;
+  for (let i = 0; i < 10; i++) {
+    const x = startX + i * 44 + 22;
+    const y = 100 + Math.sin(totalTime * 2 + i * 0.5) * 8;
+    ctx.font = `bold 36px ${font}`;
+    ctx.fillStyle = ['#FFD700','#FF8C42','#4ECDC4','#F472B6','#60A5FA'][i % 5];
+    ctx.fillText(CHARS[i].char, x, y);
+  }
+
+  // Title
+  const bounce = Math.sin(totalTime * 2) * 6;
+  ctx.font = `bold 56px ${font}`;
+  ctx.strokeStyle = '#FF8C42';
+  ctx.lineWidth = 5;
+  ctx.fillStyle = '#FFD93D';
+  ctx.strokeText('太棒了，Bobo！', W / 2, 220 + bounce);
+  ctx.fillText('太棒了，Bobo！', W / 2, 220 + bounce);
+
+  ctx.font = `bold 30px ${font}`;
+  ctx.fillStyle = '#E0E0FF';
+  ctx.fillText('你学会了10个汉字！', W / 2, 290);
+
+  // Show each char with its picture small
+  for (let i = 0; i < 10; i++) {
+    const col = i % 5;
+    const row = Math.floor(i / 5);
+    const x = W * 0.15 + col * (W * 0.175);
+    const y = 350 + row * 90;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(0.3, 0.3);
+    CHARS[i].draw(0, 0, 100);
+    ctx.restore();
+
+    ctx.font = `bold 24px ${font}`;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(CHARS[i].char, x + 40, y);
+  }
+
+  // Play again
+  if (Math.sin(totalTime * 4) > -0.3) {
+    ctx.font = `bold 22px ${font}`;
+    ctx.fillStyle = '#FFD93D';
+    ctx.fillText('点击重新开始', W / 2, H - 30);
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+  update(dt);
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) / scale,
+    y: (e.clientY - rect.top) / scale
+  };
+}
+
+function hitTestButtons(pos) {
+  const btns = getButtonPositions();
+  for (let i = 0; i < btns.length; i++) {
+    const b = btns[i];
+    if (pos.x >= b.x && pos.x <= b.x + b.w && pos.y >= b.y && pos.y <= b.y + b.h) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  if (state !== STATE.QUIZ) { hoveredChoice = -1; canvas.style.cursor = 'default'; return; }
+  const pos = getCanvasPos(e);
+  hoveredChoice = hitTestButtons(pos);
+  canvas.style.cursor = hoveredChoice >= 0 ? 'pointer' : 'default';
+});
+
+canvas.addEventListener('click', (e) => {
+  ensureAudio();
+  const pos = getCanvasPos(e);
+
+  if (state === STATE.TITLE) {
+    sfxStart();
+    startLearning(0);
+    return;
+  }
+
+  if (state === STATE.VICTORY) {
+    currentIndex = 0;
+    state = STATE.TITLE;
+    return;
+  }
+
+  // Skip during learning phases
+  if (state === STATE.LEARN_SHOW || state === STATE.LEARN_MORPH || state === STATE.LEARN_CHAR) {
+    if (state === STATE.LEARN_SHOW) {
+      state = STATE.LEARN_MORPH;
+      stateTimer = 0;
+      sfxMorph();
+    } else if (state === STATE.LEARN_MORPH) {
+      state = STATE.LEARN_CHAR;
+      stateTimer = 0;
+    } else {
+      generateQuiz();
+    }
+    return;
+  }
+
+  if (state === STATE.QUIZ) {
+    const idx = hitTestButtons(pos);
+    if (idx >= 0) handleQuizChoice(idx);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  ensureAudio();
+
+  if (state === STATE.TITLE) {
+    sfxStart();
+    startLearning(0);
+    return;
+  }
+
+  if (state === STATE.VICTORY) {
+    currentIndex = 0;
+    state = STATE.TITLE;
+    return;
+  }
+
+  // Skip during learning phases
+  if (state === STATE.LEARN_SHOW || state === STATE.LEARN_MORPH || state === STATE.LEARN_CHAR) {
+    if (state === STATE.LEARN_SHOW) {
+      state = STATE.LEARN_MORPH;
+      stateTimer = 0;
+      sfxMorph();
+    } else if (state === STATE.LEARN_MORPH) {
+      state = STATE.LEARN_CHAR;
+      stateTimer = 0;
+    } else {
+      generateQuiz();
+    }
+    return;
+  }
+
+  // Number keys 1-4 for quiz
+  if (state === STATE.QUIZ) {
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= 4) {
+      handleQuizChoice(num - 1);
+    }
+  }
+});
+
+// ============================================================
+// BOOT
+// ============================================================
+requestAnimationFrame((t) => {
+  lastTime = t;
+  gameLoop(t);
+});
+</script>
+</body>
+</html>
