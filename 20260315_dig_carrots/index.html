@@ -21,10 +21,106 @@ html, body {
 canvas {
   display: block;
 }
+#setup-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.7);
+  z-index: 10;
+  align-items: center;
+  justify-content: center;
+}
+#setup-overlay.active { display: flex; }
+#setup-panel {
+  background: linear-gradient(135deg, #A0724A, #6B3F23);
+  border-radius: 20px;
+  padding: 24px 32px;
+  max-width: 600px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 4px solid #FFD93D;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+#setup-panel h2 {
+  font-family: "Chalkboard SE", "Comic Sans MS", cursive;
+  color: #FFD93D;
+  text-align: center;
+  font-size: 28px;
+  margin-bottom: 16px;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+.word-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+.word-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.word-slot label {
+  font-family: "Chalkboard SE", "Comic Sans MS", cursive;
+  color: #fff;
+  font-size: 16px;
+  min-width: 24px;
+  text-align: right;
+}
+.word-slot input {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 2px solid #C4A265;
+  background: #FFF8E7;
+  font-family: "Chalkboard SE", "Comic Sans MS", cursive;
+  font-size: 18px;
+  text-transform: uppercase;
+  outline: none;
+  color: #333;
+}
+.word-slot input:focus { border-color: #FF8C42; }
+.setup-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 18px;
+}
+.setup-btn {
+  font-family: "Chalkboard SE", "Comic Sans MS", cursive;
+  font-size: 22px;
+  font-weight: bold;
+  padding: 10px 32px;
+  border-radius: 12px;
+  border: 3px solid;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.setup-btn:active { transform: scale(0.95); }
+#setup-start {
+  background: #4CAF50;
+  border-color: #2E7D32;
+  color: #fff;
+}
+#setup-cancel {
+  background: #FF6B6B;
+  border-color: #CC3333;
+  color: #fff;
+}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="setup-overlay">
+  <div id="setup-panel">
+    <h2>Set Up Words</h2>
+    <div class="word-grid" id="word-grid"></div>
+    <div class="setup-buttons">
+      <button class="setup-btn" id="setup-cancel">Cancel</button>
+      <button class="setup-btn" id="setup-start">Start!</button>
+    </div>
+  </div>
+</div>
 <script>
 // ============================================================
 // CONFIGURATION
@@ -820,7 +916,85 @@ function drawTitleScreen(time) {
     ctx.strokeText('Click anywhere to start!', CONFIG.W / 2, CONFIG.H - 40);
     ctx.fillText('Click anywhere to start!', CONFIG.W / 2, CONFIG.H - 40);
   }
+
+  // "Set Words" button (top-right)
+  const btnX = CONFIG.W - 100, btnY = 30, btnW = 160, btnH = 40;
+  ctx.save();
+  roundRect(btnX - btnW / 2, btnY - btnH / 2, btnW, btnH, 12);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fill();
+  roundRect(btnX - btnW / 2 + 2, btnY - btnH / 2 + 2, btnW - 4, btnH - 4, 10);
+  ctx.fillStyle = '#FF8C42';
+  ctx.fill();
+  ctx.strokeStyle = '#CC6020';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.font = `bold 18px ${font}`;
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Set Words', btnX, btnY);
+  ctx.restore();
 }
+
+// Setup button hit area
+const SETUP_BTN = { x: CONFIG.W - 100, y: 30, w: 160, h: 40 };
+
+function hitTestSetupBtn(pos) {
+  return pos.x > SETUP_BTN.x - SETUP_BTN.w / 2 && pos.x < SETUP_BTN.x + SETUP_BTN.w / 2 &&
+         pos.y > SETUP_BTN.y - SETUP_BTN.h / 2 && pos.y < SETUP_BTN.y + SETUP_BTN.h / 2;
+}
+
+// ============================================================
+// VOCABULARY SETUP
+// ============================================================
+const setupOverlay = document.getElementById('setup-overlay');
+const wordGrid = document.getElementById('word-grid');
+const DEFAULT_WORDS = [...CONFIG.WORDS];
+
+function buildSetupGrid() {
+  wordGrid.innerHTML = '';
+  for (let i = 0; i < 16; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'word-slot';
+    const label = document.createElement('label');
+    label.textContent = (i + 1) + '.';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 12;
+    input.placeholder = '';
+    if (CONFIG.WORDS[i]) input.value = CONFIG.WORDS[i];
+    slot.appendChild(label);
+    slot.appendChild(input);
+    wordGrid.appendChild(slot);
+  }
+}
+
+function showSetup() {
+  buildSetupGrid();
+  setupOverlay.classList.add('active');
+}
+
+function hideSetup() {
+  setupOverlay.classList.remove('active');
+}
+
+function applySetupWords() {
+  const inputs = wordGrid.querySelectorAll('input');
+  const words = [];
+  inputs.forEach(inp => {
+    const w = inp.value.trim().toUpperCase().replace(/[^A-Z]/g, '');
+    if (w.length >= 2) words.push(w);
+  });
+  if (words.length > 0) {
+    CONFIG.WORDS = words;
+  }
+  hideSetup();
+  startGame();
+}
+
+document.getElementById('setup-start').addEventListener('click', applySetupWords);
+document.getElementById('setup-cancel').addEventListener('click', hideSetup);
 
 function drawGameOverScreen(time) {
   ctx.drawImage(bgCanvas, 0, 0);
@@ -1380,6 +1554,10 @@ canvas.addEventListener('click', (e) => {
   const pos = getCanvasPos(e);
 
   if (state === STATE.TITLE) {
+    if (hitTestSetupBtn(pos)) {
+      showSetup();
+      return;
+    }
     startGame();
     return;
   }
