@@ -917,7 +917,9 @@ function startGame() {
   sfxStart();
   score = 0;
   round = 0;
-  wordOrder = shuffle(CONFIG.WORDS).slice(0, CONFIG.ROUNDS);
+  const maxRounds = Math.min(CONFIG.ROUNDS, CONFIG.WORDS.length);
+  wordOrder = shuffle(CONFIG.WORDS).slice(0, maxRounds);
+  CONFIG.ROUNDS = maxRounds;
   startRound();
 }
 
