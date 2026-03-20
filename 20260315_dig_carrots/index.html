@@ -921,15 +921,33 @@ function startGame() {
   startRound();
 }
 
+// Build maskable units that keep digraphs (PH, SH, CH) together
+function getMaskableUnits(word) {
+  const DIGRAPHS = ['PH', 'SH', 'CH'];
+  const units = [];
+  const used = new Set();
+  for (let i = 0; i < word.length - 1; i++) {
+    const pair = word[i] + word[i + 1];
+    if (DIGRAPHS.includes(pair) && !used.has(i)) {
+      units.push([i, i + 1]);
+      used.add(i);
+      used.add(i + 1);
+    }
+  }
+  for (let i = 0; i < word.length; i++) {
+    if (!used.has(i)) units.push([i]);
+  }
+  return units;
+}
+
 function startRound() {
   round++;
   currentWord = wordOrder[round - 1];
   digAnim = null;
 
-  const indices = [];
-  for (let i = 0; i < currentWord.length; i++) indices.push(i);
-  const shuffledIndices = shuffle(indices);
-  maskedIndices = shuffledIndices.slice(0, CONFIG.MASKS_PER_WORD).sort((a, b) => a - b);
+  const units = getMaskableUnits(currentWord);
+  const selectedUnits = shuffle(units).slice(0, CONFIG.MASKS_PER_WORD);
+  maskedIndices = selectedUnits.flat().sort((a, b) => a - b);
   revealedLetters = [];
   correctLetters = maskedIndices.map(i => currentWord[i]).join('');
   answered = false;
