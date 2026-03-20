@@ -132,6 +132,16 @@ function sfxStart() {
     setTimeout(() => playTone(f, 0.15, 'sine', 0.1), i * 80));
 }
 
+function speakWord(word) {
+  if ('speechSynthesis' in window) {
+    const utterance = new SpeechSynthesisUtterance(word);
+    utterance.rate = 0.85;
+    utterance.pitch = 1.1;
+    utterance.lang = 'en-US';
+    speechSynthesis.speak(utterance);
+  }
+}
+
 // ============================================================
 // GAME STATE
 // ============================================================
@@ -1009,6 +1019,7 @@ function timeoutRound() {
   sfxTimeout();
   revealedLetters = correctLetters.split('');
   answered = true;
+  speakWord(currentWord);
   carrots.forEach(c => {
     if (c.state === 'idle') {
       c.state = 'rotting';
@@ -1101,6 +1112,7 @@ function updateDigAnim(dt) {
       score++;
       roundResult = 'correct';
       setTimeout(sfxCorrect, 100);
+      speakWord(currentWord);
       endRound();
     }
   }

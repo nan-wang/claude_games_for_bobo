@@ -33,14 +33,16 @@ const CONFIG = {
   W: 960,
   H: 540,
   WORDS: [
-    'VOLCANO','ROCK','MAGMA','LAVA','SLEEP','ERUPTION','HAND','JUMP',
-    'KING','LAKE','MAKE','NAME','OPEN','PLAY','RAIN','SAND',
-    'TAKE','UPON','VERY','WALK','BACK','COLD','DOOR','FAST',
-    'GIRL','HELP','INTO','JUST','KEEP','LONG','MUCH','NEXT',
-    'OVER','PICK','RIDE','SHIP','THEM','UNDER','WATER','PLANT',
-    'ABOVE','BEGAN','BRING','CARRY','CLEAN','CLIMB','DRINK','EARTH',
-    'EIGHT','FLOAT','GREEN','HAPPY','HOUSE','LEARN','LIGHT','MIGHT',
-    'NORTH','ROUND','STORY','THINK'
+    'PHONE','GRAPH','SPHERE','PHEW','NEPHEW','MORPH','PHONICS','TYPHOON',
+    'PHRASE','PHASE','GOPHER'
+    // 'NAME'
+    // 'OPEN','PLAY','RAIN','SAND',
+    // 'TAKE','UPON','VERY','WALK','BACK','COLD','DOOR','FAST',
+    // 'GIRL','HELP','INTO','JUST','KEEP','LONG','MUCH','NEXT',
+    // 'OVER','PICK','RIDE','SHIP','THEM','UNDER','WATER','PLANT',
+    // 'ABOVE','BEGAN','BRING','CARRY','CLEAN','CLIMB','DRINK','EARTH',
+    // 'EIGHT','FLOAT','GREEN','HAPPY','HOUSE','LEARN','LIGHT','MIGHT',
+    // 'NORTH','ROUND','STORY','THINK'
   ],
   ROUNDS: 16,
   CARROTS_PER_ROUND: 4,
@@ -123,6 +125,16 @@ function sfxGameOver() {
 function sfxStart() {
   [523, 659, 784, 1047].forEach((f, i) =>
     setTimeout(() => playTone(f, 0.15, 'sine', 0.1), i * 80));
+}
+
+function speakWord(word) {
+  if ('speechSynthesis' in window) {
+    const utterance = new SpeechSynthesisUtterance(word);
+    utterance.rate = 0.85;
+    utterance.pitch = 1.1;
+    utterance.lang = 'en-US';
+    speechSynthesis.speak(utterance);
+  }
 }
 
 // ============================================================
@@ -1023,6 +1035,7 @@ function timeoutRound() {
   sfxTimeout();
   revealedLetters = correctLetters.split('');
   answered = true;
+  speakWord(currentWord);
   carrots.forEach(c => {
     if (c.state === 'idle') {
       c.state = 'rotting';
@@ -1124,6 +1137,7 @@ function updateDigAnim(dt) {
       score++;
       roundResult = 'correct';
       setTimeout(sfxCorrect, 100);
+      speakWord(currentWord);
       endRound();
     }
   }
