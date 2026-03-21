@@ -1,0 +1,1747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Build Words! - PH Words for Bobo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #1a1a3e;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const W = 960, H = 540;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = W;
+canvas.height = H;
+
+let scale = 1, offsetX = 0, offsetY = 0;
+
+function resize() {
+  const ww = window.innerWidth, wh = window.innerHeight;
+  scale = Math.min(ww / W, wh / H);
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+  offsetX = (ww - W * scale) / 2;
+  offsetY = (wh - H * scale) / 2;
+  canvas.style.position = 'absolute';
+  canvas.style.left = offsetX + 'px';
+  canvas.style.top = offsetY + 'px';
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ============================================================
+// AUDIO
+// ============================================================
+let audioCtx;
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function playTone(freq, dur, type = 'sine', vol = 0.1, slide = 0) {
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  if (slide) o.frequency.linearRampToValueAtTime(freq + slide, audioCtx.currentTime + dur);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g).connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + dur);
+}
+
+function sfxCorrect() {
+  playTone(523, 0.15, 'sine', 0.1, 200);
+}
+function sfxWordComplete() {
+  [392, 494, 587, 784].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.2, 'sine', 0.12), i * 100));
+}
+function sfxWrong() {
+  playTone(233, 0.15, 'triangle', 0.08);
+  setTimeout(() => playTone(200, 0.2, 'triangle', 0.08), 80);
+}
+function sfxVictory() {
+  [392, 494, 587, 784, 587, 784, 1047].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.25, 'sine', 0.1), i * 120));
+}
+function sfxStart() {
+  [523, 659, 784, 1047].forEach((f, i) =>
+    setTimeout(() => playTone(f, 0.15, 'sine', 0.1), i * 80));
+}
+
+function speakWord(word) {
+  if ('speechSynthesis' in window) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(word);
+    u.rate = 0.85;
+    u.pitch = 1.1;
+    u.lang = 'en-US';
+    speechSynthesis.speak(u);
+  }
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function drawStar(cx, cy, r, points) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const rad = i % 2 === 0 ? r : r * 0.4;
+    const method = i === 0 ? 'moveTo' : 'lineTo';
+    ctx[method](cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
+  }
+  ctx.closePath();
+}
+
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+const TILE_COLORS = ['#FF6B6B','#4ECDC4','#FFD93D','#A78BFA','#60A5FA','#F472B6','#34D399','#FF8C42'];
+const ENCOURAGEMENTS = ['Amazing!','Great job!','You did it!','Wonderful!','Super!','Fantastic!','Awesome!','Brilliant!'];
+
+// ============================================================
+// PROCEDURAL DRAWINGS
+// ============================================================
+function drawPhone(cx, cy, sz) {
+  const s = sz / 100;
+  // Body
+  ctx.fillStyle = '#333';
+  roundRect(cx - 25*s, cy - 45*s, 50*s, 90*s, 8*s);
+  ctx.fill();
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 2*s;
+  ctx.stroke();
+  // Screen
+  ctx.fillStyle = '#4FC3F7';
+  roundRect(cx - 18*s, cy - 35*s, 36*s, 40*s, 4*s);
+  ctx.fill();
+  // Home button
+  ctx.beginPath();
+  ctx.arc(cx, cy + 32*s, 6*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#555';
+  ctx.fill();
+  // Signal waves
+  for (let i = 1; i <= 3; i++) {
+    ctx.beginPath();
+    ctx.arc(cx + 8*s, cy - 20*s, i * 6*s, -Math.PI * 0.6, -Math.PI * 0.1);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5*s;
+    ctx.stroke();
+  }
+}
+
+function drawGraph(cx, cy, sz) {
+  const s = sz / 100;
+  // Axes
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2.5*s;
+  ctx.beginPath();
+  ctx.moveTo(cx - 40*s, cy - 40*s);
+  ctx.lineTo(cx - 40*s, cy + 35*s);
+  ctx.lineTo(cx + 45*s, cy + 35*s);
+  ctx.stroke();
+  // Arrow heads
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(cx - 40*s, cy - 45*s);
+  ctx.lineTo(cx - 35*s, cy - 38*s);
+  ctx.lineTo(cx - 45*s, cy - 38*s);
+  ctx.fill();
+  // Bars
+  const colors = ['#FF6B6B','#4ECDC4','#FFD93D','#A78BFA','#60A5FA'];
+  const heights = [50, 70, 35, 60, 45];
+  for (let i = 0; i < 5; i++) {
+    const bx = cx - 30*s + i * 16*s;
+    const bh = heights[i] * s * 0.8;
+    ctx.fillStyle = colors[i];
+    roundRect(bx, cy + 35*s - bh, 12*s, bh, 2*s);
+    ctx.fill();
+  }
+}
+
+function drawSphere(cx, cy, sz) {
+  const s = sz / 100;
+  const r = 40*s;
+  // Shadow
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 42*s, 30*s, 8*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fill();
+  // Main sphere
+  const grad = ctx.createRadialGradient(cx - 12*s, cy - 15*s, 5*s, cx, cy, r);
+  grad.addColorStop(0, '#FF9A9E');
+  grad.addColorStop(0.5, '#E05070');
+  grad.addColorStop(1, '#8B1A3A');
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+  // Highlight
+  ctx.beginPath();
+  ctx.arc(cx - 14*s, cy - 16*s, 10*s, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fill();
+}
+
+function drawPhew(cx, cy, sz) {
+  const s = sz / 100;
+  // Face
+  ctx.beginPath();
+  ctx.arc(cx, cy, 35*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFD194';
+  ctx.fill();
+  ctx.strokeStyle = '#C9956B';
+  ctx.lineWidth = 2*s;
+  ctx.stroke();
+  // Eyes - relieved/closed
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2.5*s;
+  ctx.beginPath();
+  ctx.arc(cx - 12*s, cy - 6*s, 6*s, Math.PI * 0.1, Math.PI * 0.9);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx + 12*s, cy - 6*s, 6*s, Math.PI * 0.1, Math.PI * 0.9);
+  ctx.stroke();
+  // Open mouth
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 14*s, 8*s, 5*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#333';
+  ctx.fill();
+  // Sweat drops
+  for (let i = 0; i < 3; i++) {
+    const dx = 30*s + i * 10*s;
+    const dy = -20*s + i * 12*s;
+    ctx.beginPath();
+    ctx.moveTo(cx + dx, cy + dy - 6*s);
+    ctx.quadraticCurveTo(cx + dx + 4*s, cy + dy, cx + dx, cy + dy + 6*s);
+    ctx.quadraticCurveTo(cx + dx - 4*s, cy + dy, cx + dx, cy + dy - 6*s);
+    ctx.fillStyle = '#64B5F6';
+    ctx.fill();
+  }
+  // Hand wiping
+  ctx.fillStyle = '#FFD194';
+  roundRect(cx - 30*s, cy - 35*s, 25*s, 10*s, 4*s);
+  ctx.fill();
+}
+
+function drawNephew(cx, cy, sz) {
+  const s = sz / 100;
+  // Body (t-shirt)
+  ctx.fillStyle = '#4FC3F7';
+  roundRect(cx - 18*s, cy - 8*s, 36*s, 30*s, 6*s);
+  ctx.fill();
+  // Sleeves
+  ctx.fillStyle = '#4FC3F7';
+  roundRect(cx - 28*s, cy - 6*s, 14*s, 16*s, 4*s);
+  ctx.fill();
+  roundRect(cx + 14*s, cy - 6*s, 14*s, 16*s, 4*s);
+  ctx.fill();
+  // Arms
+  ctx.fillStyle = '#FFD194';
+  ctx.fillRect(cx - 28*s, cy + 8*s, 10*s, 14*s);
+  ctx.fillRect(cx + 18*s, cy + 8*s, 10*s, 14*s);
+  // Head
+  ctx.beginPath();
+  ctx.arc(cx, cy - 22*s, 20*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFD194';
+  ctx.fill();
+  // Hair
+  ctx.fillStyle = '#6D4C41';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 28*s, 20*s, Math.PI, Math.PI * 2);
+  ctx.fill();
+  // Hair spikes
+  for (let i = -2; i <= 2; i++) {
+    ctx.beginPath();
+    ctx.moveTo(cx + i * 8*s - 4*s, cy - 42*s);
+    ctx.lineTo(cx + i * 8*s, cy - 50*s);
+    ctx.lineTo(cx + i * 8*s + 4*s, cy - 42*s);
+    ctx.fill();
+  }
+  // Eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(cx - 8*s, cy - 22*s, 3*s, 0, Math.PI * 2);
+  ctx.arc(cx + 8*s, cy - 22*s, 3*s, 0, Math.PI * 2);
+  ctx.fill();
+  // Smile
+  ctx.beginPath();
+  ctx.arc(cx, cy - 16*s, 8*s, 0.1, Math.PI - 0.1);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2*s;
+  ctx.stroke();
+  // Legs
+  ctx.fillStyle = '#555';
+  ctx.fillRect(cx - 14*s, cy + 22*s, 12*s, 22*s);
+  ctx.fillRect(cx + 2*s, cy + 22*s, 12*s, 22*s);
+  // Shoes
+  ctx.fillStyle = '#E53935';
+  roundRect(cx - 16*s, cy + 40*s, 16*s, 8*s, 3*s);
+  ctx.fill();
+  roundRect(cx, cy + 40*s, 16*s, 8*s, 3*s);
+  ctx.fill();
+}
+
+function drawMorph(cx, cy, sz) {
+  const s = sz / 100;
+  const t = (Math.sin(totalTime * 2) + 1) / 2; // 0 to 1
+
+  // Morphing shape - circle to star
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.beginPath();
+  const points = 5;
+  for (let i = 0; i < points * 2; i++) {
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const outerR = 38 * s;
+    const innerR = 38 * s * (1 - t * 0.6); // circle when t=0, star when t=1
+    const rad = i % 2 === 0 ? outerR : innerR;
+    if (i === 0) ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad);
+    else ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
+  }
+  ctx.closePath();
+  const hue = t * 120 + 200;
+  ctx.fillStyle = `hsl(${hue}, 70%, 60%)`;
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2*s;
+  ctx.stroke();
+  ctx.restore();
+
+  // Arrow
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${20*s}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('↻', cx + 44*s, cy + 6*s);
+}
+
+function drawPhonics(cx, cy, sz) {
+  const s = sz / 100;
+  // Open book
+  ctx.fillStyle = '#F5F5DC';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 10*s);
+  ctx.lineTo(cx - 40*s, cy - 5*s);
+  ctx.lineTo(cx - 40*s, cy + 35*s);
+  ctx.lineTo(cx, cy + 45*s);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 10*s);
+  ctx.lineTo(cx + 40*s, cy - 5*s);
+  ctx.lineTo(cx + 40*s, cy + 35*s);
+  ctx.lineTo(cx, cy + 45*s);
+  ctx.fill();
+  // Spine
+  ctx.strokeStyle = '#8D6E63';
+  ctx.lineWidth = 2*s;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 10*s);
+  ctx.lineTo(cx, cy + 45*s);
+  ctx.stroke();
+  // Text lines
+  ctx.strokeStyle = '#999';
+  ctx.lineWidth = 1*s;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(cx - 35*s, cy + 15*s + i * 8*s);
+    ctx.lineTo(cx - 8*s, cy + 15*s + i * 8*s);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx + 8*s, cy + 15*s + i * 8*s);
+    ctx.lineTo(cx + 35*s, cy + 15*s + i * 8*s);
+    ctx.stroke();
+  }
+  // Musical notes
+  const notes = [{x: -20, y: -20}, {x: 5, y: -35}, {x: 25, y: -15}];
+  notes.forEach((n, i) => {
+    const ny = n.y*s + Math.sin(totalTime * 2 + i) * 5*s;
+    ctx.fillStyle = ['#FF6B6B','#4ECDC4','#FFD93D'][i];
+    ctx.beginPath();
+    ctx.ellipse(cx + n.x*s, cy + ny, 5*s, 4*s, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 2*s;
+    ctx.beginPath();
+    ctx.moveTo(cx + n.x*s + 4.5*s, cy + ny);
+    ctx.lineTo(cx + n.x*s + 4.5*s, cy + ny - 16*s);
+    ctx.stroke();
+    // Flag
+    ctx.beginPath();
+    ctx.moveTo(cx + n.x*s + 4.5*s, cy + ny - 16*s);
+    ctx.quadraticCurveTo(cx + n.x*s + 12*s, cy + ny - 14*s, cx + n.x*s + 4.5*s, cy + ny - 10*s);
+    ctx.fill();
+  });
+}
+
+function drawTyphoon(cx, cy, sz) {
+  const s = sz / 100;
+  const rot = totalTime * 1.5;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot);
+  // Spiral arms
+  for (let arm = 0; arm < 3; arm++) {
+    ctx.save();
+    ctx.rotate(arm * Math.PI * 2 / 3);
+    ctx.beginPath();
+    for (let t = 0; t < 1; t += 0.02) {
+      const r = t * 40*s;
+      const a = t * Math.PI * 2;
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (t === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = `rgba(100,180,255,${0.8 - arm * 0.15})`;
+    ctx.lineWidth = (8 - arm * 2)*s;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Eye
+  ctx.beginPath();
+  ctx.arc(0, 0, 6*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#E3F2FD';
+  ctx.fill();
+  ctx.restore();
+  // Rain
+  ctx.strokeStyle = 'rgba(150,200,255,0.5)';
+  ctx.lineWidth = 1.5*s;
+  for (let i = 0; i < 8; i++) {
+    const rx = cx - 35*s + (i * 10*s);
+    const ry = cy + 30*s + ((totalTime * 40 + i * 17) % 30)*s;
+    ctx.beginPath();
+    ctx.moveTo(rx, ry);
+    ctx.lineTo(rx - 2*s, ry + 8*s);
+    ctx.stroke();
+  }
+}
+
+function drawPhrase(cx, cy, sz) {
+  const s = sz / 100;
+  // Speech bubble
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2.5*s;
+  roundRect(cx - 40*s, cy - 30*s, 80*s, 50*s, 12*s);
+  ctx.fill();
+  ctx.stroke();
+  // Tail
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(cx - 10*s, cy + 20*s);
+  ctx.lineTo(cx - 20*s, cy + 38*s);
+  ctx.lineTo(cx + 5*s, cy + 20*s);
+  ctx.fill();
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2.5*s;
+  ctx.beginPath();
+  ctx.moveTo(cx - 10*s, cy + 20*s);
+  ctx.lineTo(cx - 20*s, cy + 38*s);
+  ctx.lineTo(cx + 5*s, cy + 20*s);
+  ctx.stroke();
+  // Cover tail join with white
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(cx - 12*s, cy + 16*s, 20*s, 6*s);
+  // "..." dots
+  for (let i = -1; i <= 1; i++) {
+    ctx.beginPath();
+    ctx.arc(cx + i * 16*s, cy, 4*s, 0, Math.PI * 2);
+    ctx.fillStyle = '#666';
+    ctx.fill();
+  }
+}
+
+function drawPhase(cx, cy, sz) {
+  const s = sz / 100;
+  const phases = [0, 0.25, 0.5, 0.75, 1]; // new to full
+  const moonR = 12*s;
+  const spacing = 18*s;
+  const startX = cx - (phases.length - 1) * spacing / 2;
+
+  for (let i = 0; i < phases.length; i++) {
+    const mx = startX + i * spacing;
+    const my = cy;
+    const p = phases[i];
+
+    // Dark circle (new moon base)
+    ctx.beginPath();
+    ctx.arc(mx, my, moonR, 0, Math.PI * 2);
+    ctx.fillStyle = '#2a2a4e';
+    ctx.strokeStyle = '#667';
+    ctx.lineWidth = 1*s;
+    ctx.fill();
+    ctx.stroke();
+
+    if (p > 0) {
+      // Lit portion
+      ctx.beginPath();
+      ctx.arc(mx, my, moonR, -Math.PI/2, Math.PI/2);
+      // Curve for the terminator
+      const bulge = moonR * (2 * p - 1);
+      ctx.bezierCurveTo(mx + bulge, my + moonR * 0.66, mx + bulge, my - moonR * 0.66, mx, my - moonR);
+      ctx.fillStyle = '#FFF9C4';
+      ctx.fill();
+    }
+  }
+  // Label "New" and "Full"
+  ctx.font = `${9*s}px Arial`;
+  ctx.fillStyle = '#aaa';
+  ctx.textAlign = 'center';
+  ctx.fillText('New', startX, cy + moonR + 12*s);
+  ctx.fillText('Full', startX + 4 * spacing, cy + moonR + 12*s);
+}
+
+function drawGopher(cx, cy, sz) {
+  const s = sz / 100;
+  // Dirt mound
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 25*s, 45*s, 18*s, 0, Math.PI, 0);
+  ctx.fillStyle = '#8D6E63';
+  ctx.fill();
+  // Dirt texture dots
+  ctx.fillStyle = '#795548';
+  for (let i = 0; i < 6; i++) {
+    ctx.beginPath();
+    ctx.arc(cx - 30*s + i * 12*s, cy + 20*s - Math.random() * 5*s, 2*s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Body behind mound
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - 5*s, 22*s, 30*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#A1887F';
+  ctx.fill();
+  // Head
+  ctx.beginPath();
+  ctx.arc(cx, cy - 18*s, 20*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#A1887F';
+  ctx.fill();
+  // Ears
+  ctx.beginPath();
+  ctx.arc(cx - 16*s, cy - 32*s, 7*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#A1887F';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx - 16*s, cy - 32*s, 4*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#D7A896';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 16*s, cy - 32*s, 7*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#A1887F';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 16*s, cy - 32*s, 4*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#D7A896';
+  ctx.fill();
+  // Belly patch
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - 12*s, 12*s, 14*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#D7CCC8';
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(cx - 8*s, cy - 22*s, 4*s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 8*s, cy - 22*s, 4*s, 0, Math.PI * 2);
+  ctx.fill();
+  // Eye highlights
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(cx - 6*s, cy - 23*s, 1.5*s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 10*s, cy - 23*s, 1.5*s, 0, Math.PI * 2);
+  ctx.fill();
+  // Nose
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - 15*s, 5*s, 3.5*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#5D4037';
+  ctx.fill();
+  // Teeth
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(cx - 3.5*s, cy - 10*s, 3*s, 5*s);
+  ctx.fillRect(cx + 0.5*s, cy - 10*s, 3*s, 5*s);
+  ctx.strokeStyle = '#bbb';
+  ctx.lineWidth = 0.5*s;
+  ctx.strokeRect(cx - 3.5*s, cy - 10*s, 3*s, 5*s);
+  ctx.strokeRect(cx + 0.5*s, cy - 10*s, 3*s, 5*s);
+  // Paws on mound
+  ctx.fillStyle = '#A1887F';
+  ctx.beginPath();
+  ctx.ellipse(cx - 18*s, cy + 10*s, 8*s, 5*s, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx + 18*s, cy + 10*s, 8*s, 5*s, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  // Re-draw mound top edge
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 25*s, 45*s, 5*s, 0, Math.PI, 0);
+  ctx.fillStyle = '#8D6E63';
+  ctx.fill();
+}
+
+function drawDolphin(cx, cy, sz) {
+  const s = sz / 100;
+  // Water
+  ctx.fillStyle = '#1565C0';
+  ctx.fillRect(cx - 50*s, cy + 15*s, 100*s, 35*s);
+  // Waves
+  ctx.strokeStyle = '#42A5F5';
+  ctx.lineWidth = 2*s;
+  for (let w = 0; w < 2; w++) {
+    ctx.beginPath();
+    for (let x = -50; x <= 50; x += 2) {
+      const wx = cx + x*s;
+      const wy = cy + 15*s + w * 12*s + Math.sin((x + totalTime * 30) * 0.1) * 3*s;
+      if (x === -50) ctx.moveTo(wx, wy);
+      else ctx.lineTo(wx, wy);
+    }
+    ctx.stroke();
+  }
+  // Dolphin body
+  ctx.save();
+  ctx.translate(cx, cy - 8*s);
+  ctx.rotate(-0.3);
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(-35*s, 0);
+  ctx.bezierCurveTo(-30*s, -20*s, 10*s, -22*s, 35*s, -5*s);
+  ctx.bezierCurveTo(35*s, 5*s, 10*s, 15*s, -20*s, 10*s);
+  ctx.bezierCurveTo(-30*s, 8*s, -35*s, 4*s, -35*s, 0);
+  const dGrad = ctx.createLinearGradient(0, -22*s, 0, 15*s);
+  dGrad.addColorStop(0, '#607D8B');
+  dGrad.addColorStop(1, '#B0BEC5');
+  ctx.fillStyle = dGrad;
+  ctx.fill();
+  // Dorsal fin
+  ctx.beginPath();
+  ctx.moveTo(0, -15*s);
+  ctx.lineTo(-5*s, -30*s);
+  ctx.lineTo(10*s, -15*s);
+  ctx.fillStyle = '#546E7A';
+  ctx.fill();
+  // Tail
+  ctx.beginPath();
+  ctx.moveTo(-30*s, 2*s);
+  ctx.lineTo(-45*s, -10*s);
+  ctx.lineTo(-40*s, 0);
+  ctx.lineTo(-45*s, 12*s);
+  ctx.lineTo(-30*s, 4*s);
+  ctx.fillStyle = '#546E7A';
+  ctx.fill();
+  // Eye
+  ctx.beginPath();
+  ctx.arc(22*s, -6*s, 3*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#333';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(22.5*s, -7*s, 1*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fill();
+  // Smile
+  ctx.beginPath();
+  ctx.arc(28*s, -2*s, 8*s, -0.2, 0.7);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1.5*s;
+  ctx.stroke();
+  // Snout
+  ctx.beginPath();
+  ctx.moveTo(35*s, -5*s);
+  ctx.lineTo(42*s, -3*s);
+  ctx.lineTo(35*s, 0);
+  ctx.fillStyle = '#78909C';
+  ctx.fill();
+  ctx.restore();
+  // Splash
+  ctx.fillStyle = 'rgba(150,210,255,0.6)';
+  for (let i = 0; i < 5; i++) {
+    const sx = cx - 15*s + i * 8*s;
+    const sy = cy + 12*s - Math.abs(Math.sin(totalTime * 3 + i)) * 8*s;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 2.5*s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawPhoto(cx, cy, sz) {
+  const s = sz / 100;
+  // Camera body
+  ctx.fillStyle = '#333';
+  roundRect(cx - 38*s, cy - 22*s, 76*s, 50*s, 8*s);
+  ctx.fill();
+  // Grip
+  ctx.fillStyle = '#444';
+  roundRect(cx + 22*s, cy - 22*s, 16*s, 50*s, 4*s);
+  ctx.fill();
+  // Viewfinder bump
+  ctx.fillStyle = '#444';
+  roundRect(cx - 8*s, cy - 30*s, 20*s, 12*s, 3*s);
+  ctx.fill();
+  // Lens outer
+  ctx.beginPath();
+  ctx.arc(cx - 5*s, cy + 3*s, 18*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#222';
+  ctx.fill();
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 2*s;
+  ctx.stroke();
+  // Lens inner rings
+  for (let i = 3; i >= 1; i--) {
+    ctx.beginPath();
+    ctx.arc(cx - 5*s, cy + 3*s, i * 5*s, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(100,100,150,${0.3 + i * 0.1})`;
+    ctx.lineWidth = 1.5*s;
+    ctx.stroke();
+  }
+  // Lens highlight
+  const lGrad = ctx.createRadialGradient(cx - 8*s, cy, 2*s, cx - 5*s, cy + 3*s, 14*s);
+  lGrad.addColorStop(0, 'rgba(100,150,255,0.3)');
+  lGrad.addColorStop(1, 'rgba(50,50,100,0.1)');
+  ctx.beginPath();
+  ctx.arc(cx - 5*s, cy + 3*s, 14*s, 0, Math.PI * 2);
+  ctx.fillStyle = lGrad;
+  ctx.fill();
+  // Flash
+  ctx.fillStyle = '#FFD93D';
+  ctx.beginPath();
+  ctx.arc(cx - 28*s, cy - 16*s, 5*s, 0, Math.PI * 2);
+  ctx.fill();
+  // Flash rays
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 28*s + Math.cos(a) * 6*s, cy - 16*s + Math.sin(a) * 6*s);
+    ctx.lineTo(cx - 28*s + Math.cos(a) * 10*s, cy - 16*s + Math.sin(a) * 10*s);
+    ctx.strokeStyle = '#FFD93D';
+    ctx.lineWidth = 1.5*s;
+    ctx.stroke();
+  }
+  // Shutter button
+  ctx.beginPath();
+  ctx.arc(cx + 12*s, cy - 26*s, 4*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#E53935';
+  ctx.fill();
+}
+
+function drawPharmacy(cx, cy, sz) {
+  const s = sz / 100;
+  // Bottle body
+  ctx.fillStyle = '#E3F2FD';
+  roundRect(cx - 22*s, cy - 20*s, 44*s, 55*s, 8*s);
+  ctx.fill();
+  ctx.strokeStyle = '#90CAF9';
+  ctx.lineWidth = 2*s;
+  ctx.stroke();
+  // Cap
+  ctx.fillStyle = '#E53935';
+  roundRect(cx - 14*s, cy - 32*s, 28*s, 14*s, 4*s);
+  ctx.fill();
+  // Label area
+  ctx.fillStyle = '#fff';
+  roundRect(cx - 18*s, cy - 8*s, 36*s, 30*s, 4*s);
+  ctx.fill();
+  // Red cross
+  ctx.fillStyle = '#E53935';
+  ctx.fillRect(cx - 3*s, cy - 2*s, 6*s, 20*s);
+  ctx.fillRect(cx - 10*s, cy + 5*s, 20*s, 6*s);
+  // Pills around
+  const pillColors = ['#FF8A80','#82B1FF','#B9F6CA','#FFD180'];
+  for (let i = 0; i < 4; i++) {
+    const pa = (i / 4) * Math.PI * 2 + 0.4;
+    const px = cx + Math.cos(pa) * 38*s;
+    const py = cy + Math.sin(pa) * 32*s;
+    ctx.beginPath();
+    ctx.ellipse(px, py, 6*s, 3.5*s, pa, 0, Math.PI * 2);
+    ctx.fillStyle = pillColors[i];
+    ctx.fill();
+  }
+}
+
+function drawElephant(cx, cy, sz) {
+  const s = sz / 100;
+  // Body
+  ctx.beginPath();
+  ctx.ellipse(cx + 5*s, cy + 5*s, 32*s, 24*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#90A4AE';
+  ctx.fill();
+  // Head
+  ctx.beginPath();
+  ctx.arc(cx - 22*s, cy - 12*s, 22*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#90A4AE';
+  ctx.fill();
+  // Left ear
+  ctx.beginPath();
+  ctx.ellipse(cx - 44*s, cy - 12*s, 16*s, 20*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#78909C';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(cx - 44*s, cy - 12*s, 11*s, 15*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFAB91';
+  ctx.fill();
+  // Right ear (behind)
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - 14*s, 14*s, 18*s, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#78909C';
+  ctx.fill();
+  // Re-draw head over right ear
+  ctx.beginPath();
+  ctx.arc(cx - 22*s, cy - 12*s, 22*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#90A4AE';
+  ctx.fill();
+  // Trunk
+  ctx.beginPath();
+  ctx.moveTo(cx - 30*s, cy - 2*s);
+  ctx.bezierCurveTo(cx - 42*s, cy + 10*s, cx - 48*s, cy + 25*s, cx - 38*s, cy + 32*s);
+  ctx.bezierCurveTo(cx - 32*s, cy + 36*s, cx - 28*s, cy + 30*s, cx - 32*s, cy + 24*s);
+  ctx.bezierCurveTo(cx - 36*s, cy + 18*s, cx - 28*s, cy + 6*s, cx - 20*s, cy);
+  ctx.fillStyle = '#90A4AE';
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(cx - 28*s, cy - 16*s, 3*s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(cx - 27*s, cy - 17*s, 1.2*s, 0, Math.PI * 2);
+  ctx.fill();
+  // Smile
+  ctx.beginPath();
+  ctx.arc(cx - 22*s, cy - 6*s, 6*s, 0.2, Math.PI - 0.2);
+  ctx.strokeStyle = '#546E7A';
+  ctx.lineWidth = 1.5*s;
+  ctx.stroke();
+  // Legs
+  ctx.fillStyle = '#78909C';
+  const legs = [[-8, 18], [6, 18], [20, 18], [32, 18]];
+  legs.forEach(([lx, ly]) => {
+    roundRect(cx + lx*s - 6*s, cy + ly*s, 12*s, 22*s, 4*s);
+    ctx.fill();
+    // Toenails
+    ctx.fillStyle = '#B0BEC5';
+    for (let t = 0; t < 3; t++) {
+      ctx.beginPath();
+      ctx.arc(cx + lx*s - 3*s + t * 3*s, cy + ly*s + 22*s, 1.5*s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#78909C';
+  });
+  // Tail
+  ctx.beginPath();
+  ctx.moveTo(cx + 37*s, cy + 2*s);
+  ctx.bezierCurveTo(cx + 44*s, cy - 5*s, cx + 48*s, cy - 8*s, cx + 45*s, cy - 14*s);
+  ctx.strokeStyle = '#78909C';
+  ctx.lineWidth = 2.5*s;
+  ctx.stroke();
+  // Tail tuft
+  ctx.beginPath();
+  ctx.arc(cx + 45*s, cy - 15*s, 3*s, 0, Math.PI * 2);
+  ctx.fillStyle = '#546E7A';
+  ctx.fill();
+}
+
+// ============================================================
+// WORD DATA
+// ============================================================
+const WORDS = [
+  { word: 'PHONE', draw: drawPhone },
+  { word: 'GRAPH', draw: drawGraph },
+  { word: 'SPHERE', draw: drawSphere },
+  { word: 'PHEW', draw: drawPhew },
+  { word: 'NEPHEW', draw: drawNephew },
+  { word: 'MORPH', draw: drawMorph },
+  { word: 'PHONICS', draw: drawPhonics },
+  { word: 'TYPHOON', draw: drawTyphoon },
+  { word: 'PHRASE', draw: drawPhrase },
+  { word: 'PHASE', draw: drawPhase },
+  { word: 'GOPHER', draw: drawGopher },
+  { word: 'DOLPHIN', draw: drawDolphin },
+  { word: 'PHOTO', draw: drawPhoto },
+  { word: 'PHARMACY', draw: drawPharmacy },
+  { word: 'ELEPHANT', draw: drawElephant },
+];
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const STATE = { TITLE: 0, SHOWING: 1, BUILDING: 2, COMPLETE: 3, VICTORY: 4 };
+let state = STATE.TITLE;
+let totalTime = 0;
+let stateTime = 0;
+
+let wordOrder = [];
+let currentWordIdx = 0;
+let nextLetterIdx = 0;
+let letterTiles = [];
+let answerSlots = [];
+let hoveredTile = -1;
+let encourageMsg = '';
+
+// Particles
+let particles = [];
+let confetti = [];
+
+const CONFETTI_COLORS = ['#FF6B6B','#4ECDC4','#FFD93D','#A78BFA','#60A5FA','#F472B6','#34D399','#FF8C42','#fff'];
+
+// ============================================================
+// PARTICLE SYSTEMS
+// ============================================================
+function spawnSparkles(x, y, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 200,
+      vy: -80 - Math.random() * 120,
+      life: 0.6 + Math.random() * 0.6,
+      maxLife: 0.6 + Math.random() * 0.6,
+      color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+      size: 3 + Math.random() * 5
+    });
+  }
+}
+
+function spawnConfetti() {
+  for (let i = 0; i < 60; i++) {
+    confetti.push({
+      x: Math.random() * W,
+      y: -20 - Math.random() * 300,
+      vx: (Math.random() - 0.5) * 60,
+      vy: 40 + Math.random() * 80,
+      rot: Math.random() * Math.PI * 2,
+      rotV: (Math.random() - 0.5) * 4,
+      color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+      w: 6 + Math.random() * 6,
+      h: 4 + Math.random() * 4,
+      wobble: Math.random() * Math.PI * 2,
+      wobbleSpeed: 1.5 + Math.random() * 2
+    });
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 200 * dt;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = Math.max(0, p.life / p.maxLife);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+}
+
+function updateConfetti(dt) {
+  for (let i = confetti.length - 1; i >= 0; i--) {
+    const c = confetti[i];
+    c.x += c.vx * dt + Math.sin(c.wobble) * 20 * dt;
+    c.y += c.vy * dt;
+    c.rot += c.rotV * dt;
+    c.wobble += c.wobbleSpeed * dt;
+    if (c.y > H + 20) confetti.splice(i, 1);
+  }
+}
+
+function drawConfetti() {
+  confetti.forEach(c => {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(c.rot);
+    ctx.fillStyle = c.color;
+    ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+    ctx.restore();
+  });
+}
+
+// ============================================================
+// TITLE SCREEN FLOATING LETTERS
+// ============================================================
+let floatingLetters = [];
+function initFloatingLetters() {
+  floatingLetters = [];
+  for (let i = 0; i < 20; i++) {
+    floatingLetters.push({
+      letter: String.fromCharCode(65 + Math.floor(Math.random() * 26)),
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 30,
+      vy: (Math.random() - 0.5) * 20,
+      size: 20 + Math.random() * 30,
+      rot: Math.random() * Math.PI * 2,
+      rotV: (Math.random() - 0.5) * 0.5,
+      color: TILE_COLORS[Math.floor(Math.random() * TILE_COLORS.length)],
+      alpha: 0.15 + Math.random() * 0.15
+    });
+  }
+}
+initFloatingLetters();
+
+function updateFloatingLetters(dt) {
+  floatingLetters.forEach(fl => {
+    fl.x += fl.vx * dt;
+    fl.y += fl.vy * dt;
+    fl.rot += fl.rotV * dt;
+    if (fl.x < -40) fl.x = W + 40;
+    if (fl.x > W + 40) fl.x = -40;
+    if (fl.y < -40) fl.y = H + 40;
+    if (fl.y > H + 40) fl.y = -40;
+  });
+}
+
+function drawFloatingLetters() {
+  floatingLetters.forEach(fl => {
+    ctx.save();
+    ctx.translate(fl.x, fl.y);
+    ctx.rotate(fl.rot);
+    ctx.globalAlpha = fl.alpha;
+    ctx.font = `bold ${fl.size}px "Chalkboard SE", "Comic Sans MS", cursive`;
+    ctx.fillStyle = fl.color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(fl.letter, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  });
+}
+
+// ============================================================
+// GAME LOGIC
+// ============================================================
+const TILE_SIZE = 64;
+const SLOT_W = 50;
+const SLOT_H = 60;
+const SLOT_GAP = 8;
+
+function startGame() {
+  wordOrder = shuffle([...Array(WORDS.length).keys()]);
+  currentWordIdx = 0;
+  state = STATE.SHOWING;
+  stateTime = 0;
+  particles = [];
+  confetti = [];
+  startWord();
+  sfxStart();
+}
+
+function startWord() {
+  const entry = WORDS[wordOrder[currentWordIdx]];
+  const word = entry.word;
+  nextLetterIdx = 0;
+
+  // Create answer slots
+  const totalW = word.length * (SLOT_W + SLOT_GAP) - SLOT_GAP;
+  const startX = (W - totalW) / 2;
+  answerSlots = [];
+  for (let i = 0; i < word.length; i++) {
+    answerSlots.push({
+      letter: word[i],
+      x: startX + i * (SLOT_W + SLOT_GAP),
+      y: 30,
+      filled: false,
+      fillProgress: 0,
+      flyFrom: null
+    });
+  }
+
+  // Create letter tiles
+  const correctLetters = word.split('');
+  // Generate noise letters
+  const wordLetterSet = new Set(correctLetters);
+  const noiseCount = Math.min(6, Math.max(4, 10 - word.length));
+  let noiseLetters = [];
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  while (noiseLetters.length < noiseCount) {
+    const c = alphabet[Math.floor(Math.random() * 26)];
+    if (!wordLetterSet.has(c)) noiseLetters.push(c);
+  }
+
+  // Combine and shuffle
+  let allLetters = correctLetters.map((l, i) => ({ letter: l, isCorrect: true, correctIndex: i }));
+  noiseLetters.forEach(l => allLetters.push({ letter: l, isCorrect: false, correctIndex: -1 }));
+  allLetters = shuffle(allLetters);
+
+  // Position in ellipse around center
+  const cx = W / 2;
+  const cy = H / 2 + 30;
+  const n = allLetters.length;
+  const radiusX = 260;
+  const radiusY = 130;
+
+  letterTiles = allLetters.map((item, i) => {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    let x = cx + Math.cos(angle) * radiusX + (Math.random() - 0.5) * 40;
+    let y = cy + Math.sin(angle) * radiusY + (Math.random() - 0.5) * 30;
+    // Clamp to canvas bounds
+    x = Math.max(TILE_SIZE / 2 + 10, Math.min(W - TILE_SIZE / 2 - 10, x));
+    y = Math.max(SLOT_H + 50, Math.min(H - TILE_SIZE / 2 - 10, y));
+    return {
+      ...item,
+      x, y,
+      isUsed: false,
+      shakeTime: 0,
+      flyProgress: -1, // -1 = not flying
+      flyToX: 0,
+      flyToY: 0,
+      flyFromX: 0,
+      flyFromY: 0,
+      color: TILE_COLORS[i % TILE_COLORS.length]
+    };
+  });
+
+  // Collision resolution
+  for (let pass = 0; pass < 10; pass++) {
+    for (let i = 0; i < letterTiles.length; i++) {
+      for (let j = i + 1; j < letterTiles.length; j++) {
+        const a = letterTiles[i], b = letterTiles[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const minDist = TILE_SIZE + 8;
+        if (dist < minDist && dist > 0) {
+          const push = (minDist - dist) / 2;
+          const nx = dx / dist, ny = dy / dist;
+          a.x -= nx * push; a.y -= ny * push;
+          b.x += nx * push; b.y += ny * push;
+          // Re-clamp
+          a.x = Math.max(TILE_SIZE / 2 + 10, Math.min(W - TILE_SIZE / 2 - 10, a.x));
+          a.y = Math.max(SLOT_H + 50, Math.min(H - TILE_SIZE / 2 - 10, a.y));
+          b.x = Math.max(TILE_SIZE / 2 + 10, Math.min(W - TILE_SIZE / 2 - 10, b.x));
+          b.y = Math.max(SLOT_H + 50, Math.min(H - TILE_SIZE / 2 - 10, b.y));
+        }
+      }
+    }
+  }
+
+  if (state === STATE.SHOWING) {
+    speakWord(word);
+  }
+}
+
+function handleLetterPick(tileIdx) {
+  const tile = letterTiles[tileIdx];
+  if (tile.isUsed || tile.flyProgress >= 0) return;
+
+  const entry = WORDS[wordOrder[currentWordIdx]];
+  const neededLetter = entry.word[nextLetterIdx];
+
+  if (tile.letter === neededLetter) {
+    // Correct!
+    tile.isUsed = true;
+    tile.flyProgress = 0;
+    const slot = answerSlots[nextLetterIdx];
+    tile.flyToX = slot.x + SLOT_W / 2;
+    tile.flyToY = slot.y + SLOT_H / 2;
+    tile.flyFromX = tile.x;
+    tile.flyFromY = tile.y;
+    slot.flyFrom = { x: tile.x, y: tile.y };
+    sfxCorrect();
+    nextLetterIdx++;
+
+    if (nextLetterIdx >= entry.word.length) {
+      // Word complete - will transition after fly animation
+    }
+  } else {
+    // Wrong
+    tile.shakeTime = 0.4;
+    sfxWrong();
+  }
+}
+
+function checkWordComplete() {
+  const entry = WORDS[wordOrder[currentWordIdx]];
+  if (nextLetterIdx >= entry.word.length) {
+    // Check all tiles done flying
+    const allDone = letterTiles.every(t => !t.isUsed || t.flyProgress >= 1 || t.flyProgress < 0);
+    if (allDone) {
+      state = STATE.COMPLETE;
+      stateTime = 0;
+      encourageMsg = ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)];
+      speakWord(entry.word);
+      sfxWordComplete();
+      // Sparkles on each slot
+      answerSlots.forEach(slot => {
+        spawnSparkles(slot.x + SLOT_W / 2, slot.y + SLOT_H / 2, 8);
+      });
+    }
+  }
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+function update(dt) {
+  totalTime += dt;
+  stateTime += dt;
+  updateParticles(dt);
+  updateConfetti(dt);
+
+  if (state === STATE.TITLE) {
+    updateFloatingLetters(dt);
+  }
+
+  if (state === STATE.SHOWING) {
+    if (stateTime >= 2.5) {
+      state = STATE.BUILDING;
+      stateTime = 0;
+    }
+  }
+
+  if (state === STATE.BUILDING) {
+    // Update tile animations
+    letterTiles.forEach(tile => {
+      if (tile.shakeTime > 0) tile.shakeTime = Math.max(0, tile.shakeTime - dt);
+      if (tile.flyProgress >= 0 && tile.flyProgress < 1) {
+        tile.flyProgress = Math.min(1, tile.flyProgress + dt / 0.3);
+        if (tile.flyProgress >= 1) {
+          // Mark slot as filled
+          const entry = WORDS[wordOrder[currentWordIdx]];
+          for (let i = 0; i < answerSlots.length; i++) {
+            if (!answerSlots[i].filled && answerSlots[i].letter === tile.letter) {
+              // Find the right slot by correctIndex
+              if (tile.correctIndex === i) {
+                answerSlots[i].filled = true;
+                answerSlots[i].fillProgress = 0;
+                break;
+              }
+            }
+          }
+        }
+      }
+    });
+    // Animate slot fill
+    answerSlots.forEach(slot => {
+      if (slot.filled && slot.fillProgress < 1) {
+        slot.fillProgress = Math.min(1, slot.fillProgress + dt * 4);
+      }
+    });
+    checkWordComplete();
+  }
+
+  if (state === STATE.COMPLETE) {
+    if (stateTime >= 2.0) {
+      currentWordIdx++;
+      if (currentWordIdx >= WORDS.length) {
+        state = STATE.VICTORY;
+        stateTime = 0;
+        spawnConfetti();
+        sfxVictory();
+      } else {
+        state = STATE.SHOWING;
+        stateTime = 0;
+        startWord();
+      }
+    }
+  }
+
+  if (state === STATE.VICTORY) {
+    if (confetti.length < 30 && Math.random() < dt * 2) {
+      spawnConfetti();
+    }
+  }
+}
+
+// ============================================================
+// DRAW
+// ============================================================
+function drawBackground() {
+  // Gradient background
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a1a3e');
+  grad.addColorStop(1, '#2d1b69');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawTitleScreen() {
+  drawFloatingLetters();
+
+  const bounce = Math.sin(totalTime * 2) * 8;
+  ctx.font = 'bold 64px "Chalkboard SE", "Comic Sans MS", cursive';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillText('Build Words!', W / 2 + 3, 180 + bounce + 3);
+
+  // Main title with color
+  const tGrad = ctx.createLinearGradient(W / 2 - 200, 180, W / 2 + 200, 180);
+  tGrad.addColorStop(0, '#FFD93D');
+  tGrad.addColorStop(0.5, '#FF8C42');
+  tGrad.addColorStop(1, '#FF6B6B');
+  ctx.fillStyle = tGrad;
+  ctx.fillText('Build Words!', W / 2, 180 + bounce);
+
+  // Subtitle
+  ctx.font = '28px "Chalkboard SE", "Comic Sans MS", cursive';
+  ctx.fillStyle = '#B39DDB';
+  ctx.fillText('Learn PH Words with Bobo!', W / 2, 250);
+
+  // Blinking prompt
+  if (Math.sin(totalTime * 3) > -0.3) {
+    ctx.font = '22px "Chalkboard SE", "Comic Sans MS", cursive';
+    ctx.fillStyle = '#90CAF9';
+    ctx.fillText('Press any key or click to start', W / 2, H - 60);
+  }
+}
+
+function drawShowingScreen() {
+  const entry = WORDS[wordOrder[currentWordIdx]];
+  const scaleAnim = Math.min(1, stateTime / 0.3);
+  const sz = 140 * easeOutCubic(scaleAnim);
+
+  ctx.save();
+  // Picture background circle
+  ctx.beginPath();
+  ctx.arc(W / 2, H / 2 - 20, sz * 0.7 + 15, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fill();
+
+  entry.draw(W / 2, H / 2 - 20, sz);
+  ctx.restore();
+
+  // Word below picture
+  ctx.font = `bold 48px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(entry.word, W / 2, H / 2 + 100);
+
+  // Progress
+  drawProgress();
+}
+
+function drawBuildingScreen() {
+  const entry = WORDS[wordOrder[currentWordIdx]];
+
+  // Picture (smaller, as hint)
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+  ctx.arc(W / 2, H / 2 + 20, 75, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fill();
+  entry.draw(W / 2, H / 2 + 20, 100);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // Answer slots
+  answerSlots.forEach((slot, i) => {
+    const sx = slot.x, sy = slot.y;
+    if (slot.filled) {
+      // Filled slot
+      const pop = 1 + Math.sin(slot.fillProgress * Math.PI) * 0.15;
+      ctx.save();
+      ctx.translate(sx + SLOT_W / 2, sy + SLOT_H / 2);
+      ctx.scale(pop, pop);
+      ctx.fillStyle = '#4CAF50';
+      roundRect(-SLOT_W / 2, -SLOT_H / 2, SLOT_W, SLOT_H, 8);
+      ctx.fill();
+      ctx.font = `bold 32px "Chalkboard SE", "Comic Sans MS", cursive`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(slot.letter, 0, 0);
+      ctx.restore();
+    } else {
+      // Empty slot
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 2;
+      roundRect(sx, sy, SLOT_W, SLOT_H, 8);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Slot index number
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.fillText(i + 1, sx + SLOT_W / 2, sy + SLOT_H / 2 + 5);
+    }
+  });
+
+  // Letter tiles
+  letterTiles.forEach((tile, idx) => {
+    if (tile.isUsed && tile.flyProgress >= 1) return; // Already placed
+
+    let tx = tile.x, ty = tile.y;
+
+    // Flying animation
+    if (tile.flyProgress >= 0 && tile.flyProgress < 1) {
+      const t = easeOutCubic(tile.flyProgress);
+      tx = tile.flyFromX + (tile.flyToX - tile.flyFromX) * t;
+      ty = tile.flyFromY + (tile.flyToY - tile.flyFromY) * t;
+      const flyScale = 1 + Math.sin(tile.flyProgress * Math.PI) * 0.3;
+      ctx.save();
+      ctx.translate(tx, ty);
+      ctx.scale(flyScale, flyScale);
+      drawTileAt(0, 0, tile, idx === hoveredTile);
+      ctx.restore();
+      return;
+    }
+
+    // Shake animation
+    let shakeOff = 0;
+    if (tile.shakeTime > 0) {
+      shakeOff = Math.sin(tile.shakeTime * 40) * 8 * (tile.shakeTime / 0.4);
+    }
+
+    const isHover = idx === hoveredTile;
+    const hoverScale = isHover ? 1.12 : 1;
+    ctx.save();
+    ctx.translate(tx + shakeOff, ty);
+    ctx.scale(hoverScale, hoverScale);
+    drawTileAt(0, 0, tile, isHover);
+    ctx.restore();
+  });
+
+  drawProgress();
+}
+
+function drawTileAt(x, y, tile, isHover) {
+  const half = TILE_SIZE / 2;
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  roundRect(x - half + 3, y - half + 3, TILE_SIZE, TILE_SIZE, 12);
+  ctx.fill();
+  // Background
+  ctx.fillStyle = tile.color;
+  roundRect(x - half, y - half, TILE_SIZE, TILE_SIZE, 12);
+  ctx.fill();
+  // Border
+  ctx.strokeStyle = isHover ? '#fff' : 'rgba(0,0,0,0.2)';
+  ctx.lineWidth = isHover ? 3 : 2;
+  roundRect(x - half, y - half, TILE_SIZE, TILE_SIZE, 12);
+  ctx.stroke();
+  // Letter
+  ctx.font = `bold 36px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(tile.letter, x, y + 1);
+}
+
+function drawCompleteScreen() {
+  const entry = WORDS[wordOrder[currentWordIdx]];
+
+  // Picture
+  entry.draw(W / 2, H / 2 - 20, 130);
+
+  // Completed word with green glow
+  ctx.save();
+  ctx.shadowColor = '#4CAF50';
+  ctx.shadowBlur = 20;
+  ctx.font = `bold 52px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#4CAF50';
+  ctx.fillText(entry.word, W / 2, H / 2 + 100);
+  ctx.restore();
+
+  // Encouragement
+  const bounce = Math.sin(stateTime * 5) * 5;
+  ctx.font = `bold 36px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.fillStyle = '#FFD93D';
+  ctx.textAlign = 'center';
+  ctx.fillText(encourageMsg, W / 2, H / 2 + 155 + bounce);
+
+  drawProgress();
+}
+
+function drawVictoryScreen() {
+  const bounce = Math.sin(totalTime * 2) * 8;
+
+  ctx.font = `bold 56px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillText('You did it, Bobo!', W / 2 + 3, 80 + bounce + 3);
+
+  // Main text
+  const tGrad = ctx.createLinearGradient(W / 2 - 250, 80, W / 2 + 250, 80);
+  tGrad.addColorStop(0, '#FFD93D');
+  tGrad.addColorStop(0.5, '#FF8C42');
+  tGrad.addColorStop(1, '#FF6B6B');
+  ctx.fillStyle = tGrad;
+  ctx.fillText('You did it, Bobo!', W / 2, 80 + bounce);
+
+  // Word grid with mini pictures
+  const cols = 5;
+  const rows = 3;
+  const cellW = 160;
+  const cellH = 110;
+  const gridW = cols * cellW;
+  const startX = (W - gridW) / 2;
+  const startY = 140;
+
+  for (let i = 0; i < WORDS.length; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = startX + col * cellW + cellW / 2;
+    const cy = startY + row * cellH + 30;
+
+    // Mini picture
+    ctx.save();
+    WORDS[wordOrder[i]].draw(cx, cy, 50);
+    ctx.restore();
+
+    // Word label
+    ctx.font = `bold 14px "Chalkboard SE", "Comic Sans MS", cursive`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#B39DDB';
+    ctx.fillText(WORDS[wordOrder[i]].word, cx, cy + 42);
+
+    // Star
+    ctx.fillStyle = '#FFD93D';
+    drawStar(cx, cy - 30, 8, 5);
+    ctx.fill();
+  }
+
+  // Restart prompt
+  if (Math.sin(totalTime * 3) > -0.3) {
+    ctx.font = '22px "Chalkboard SE", "Comic Sans MS", cursive';
+    ctx.fillStyle = '#90CAF9';
+    ctx.textAlign = 'center';
+    ctx.fillText('Click or press any key to play again!', W / 2, H - 30);
+  }
+}
+
+function drawProgress() {
+  const total = WORDS.length;
+  const current = currentWordIdx + (state === STATE.COMPLETE ? 1 : 0);
+  ctx.font = `bold 16px "Chalkboard SE", "Comic Sans MS", cursive`;
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillText(`Word ${Math.min(current + 1, total)} of ${total}`, W - 20, 24);
+
+  // Star progress bar
+  const barX = W - 20 - total * 18;
+  for (let i = 0; i < total; i++) {
+    if (i < current) {
+      ctx.fillStyle = '#FFD93D';
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    }
+    drawStar(barX + i * 18, 44, 6, 5);
+    ctx.fill();
+  }
+}
+
+function draw() {
+  drawBackground();
+
+  if (state === STATE.TITLE) {
+    drawTitleScreen();
+  } else if (state === STATE.SHOWING) {
+    drawShowingScreen();
+  } else if (state === STATE.BUILDING) {
+    drawBuildingScreen();
+  } else if (state === STATE.COMPLETE) {
+    drawCompleteScreen();
+  } else if (state === STATE.VICTORY) {
+    drawVictoryScreen();
+  }
+
+  drawParticles();
+  drawConfetti();
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (W / rect.width),
+    y: (e.clientY - rect.top) * (H / rect.height)
+  };
+}
+
+function hitTestTiles(pos) {
+  const half = TILE_SIZE / 2;
+  for (let i = letterTiles.length - 1; i >= 0; i--) {
+    const t = letterTiles[i];
+    if (t.isUsed) continue;
+    if (pos.x >= t.x - half && pos.x <= t.x + half &&
+        pos.y >= t.y - half && pos.y <= t.y + half) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  if (state !== STATE.BUILDING) { hoveredTile = -1; return; }
+  const pos = getCanvasPos(e);
+  hoveredTile = hitTestTiles(pos);
+  canvas.style.cursor = hoveredTile >= 0 ? 'pointer' : 'default';
+});
+
+canvas.addEventListener('click', (e) => {
+  ensureAudio();
+  const pos = getCanvasPos(e);
+
+  if (state === STATE.TITLE) {
+    startGame();
+    return;
+  }
+
+  if (state === STATE.SHOWING) {
+    state = STATE.BUILDING;
+    stateTime = 0;
+    return;
+  }
+
+  if (state === STATE.BUILDING) {
+    const idx = hitTestTiles(pos);
+    if (idx >= 0) handleLetterPick(idx);
+    return;
+  }
+
+  if (state === STATE.VICTORY) {
+    state = STATE.TITLE;
+    stateTime = 0;
+    initFloatingLetters();
+    return;
+  }
+});
+
+window.addEventListener('keydown', (e) => {
+  ensureAudio();
+
+  if (state === STATE.TITLE) {
+    startGame();
+    return;
+  }
+
+  if (state === STATE.SHOWING) {
+    state = STATE.BUILDING;
+    stateTime = 0;
+    return;
+  }
+
+  if (state === STATE.BUILDING) {
+    const key = e.key.toUpperCase();
+    if (key.length === 1 && key >= 'A' && key <= 'Z') {
+      // Find first matching unused tile
+      const entry = WORDS[wordOrder[currentWordIdx]];
+      const neededLetter = entry.word[nextLetterIdx];
+      if (key === neededLetter) {
+        // Find an unused correct tile for this position
+        for (let i = 0; i < letterTiles.length; i++) {
+          const t = letterTiles[i];
+          if (!t.isUsed && t.letter === key && t.isCorrect && t.correctIndex === nextLetterIdx) {
+            handleLetterPick(i);
+            return;
+          }
+        }
+        // If exact correctIndex not found, find any matching unused tile
+        for (let i = 0; i < letterTiles.length; i++) {
+          const t = letterTiles[i];
+          if (!t.isUsed && t.letter === key && t.flyProgress < 0) {
+            handleLetterPick(i);
+            return;
+          }
+        }
+      } else {
+        // Wrong key - shake a matching tile if visible
+        for (let i = 0; i < letterTiles.length; i++) {
+          const t = letterTiles[i];
+          if (!t.isUsed && t.letter === key && t.flyProgress < 0) {
+            t.shakeTime = 0.4;
+            sfxWrong();
+            return;
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (state === STATE.VICTORY) {
+    state = STATE.TITLE;
+    stateTime = 0;
+    initFloatingLetters();
+    return;
+  }
+});
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+let lastTime = 0;
+
+function gameLoop(timestamp) {
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+
+  update(dt);
+  draw();
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame((t) => {
+  lastTime = t;
+  gameLoop(t);
+});
+</script>
+</body>
+</html>
